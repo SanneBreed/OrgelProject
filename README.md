@@ -1,0 +1,90 @@
+# marcussen
+
+Minimal Python project for parsing and comparing Marcussen organ recordings from `.flac` filenames.
+
+## Install `uv` (one-time)
+
+macOS/Linux (bash/zsh):
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+Windows (PowerShell):
+
+```powershell
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+```
+
+Verify:
+
+```bash
+uv --version
+```
+
+## Setup (from `pyproject.toml`)
+
+macOS/Linux (bash/zsh):
+
+```bash
+uv venv .venv
+source .venv/bin/activate
+uv sync --extra librosa
+```
+
+Windows (PowerShell):
+
+```powershell
+uv venv .venv
+.\.venv\Scripts\Activate.ps1
+uv sync --extra librosa
+```
+
+This installs dependencies directly from `pyproject.toml` (including `fadtk`) plus the `librosa` extra used for audio loading and low-level audio processing in comparisons.
+
+`fadtk` is available at [microsoft/fadtk](https://github.com/microsoft/fadtk?tab=readme-ov-file) and provides a machine-learning-based metric between two audio fragments.
+
+## Dataset root
+
+Set a default dataset location with `MARCUSSEN_DATASET_ROOT`.
+
+macOS/Linux (bash/zsh):
+
+```bash
+export MARCUSSEN_DATASET_ROOT="Marcussen 1945-1975_FLAC_Dataset"
+```
+
+Windows (PowerShell):
+
+```powershell
+$env:MARCUSSEN_DATASET_ROOT = "Marcussen 1945-1975_FLAC_Dataset"
+```
+
+You can always override with `--root` per command.
+
+## Commands
+
+Parse all files and write `filepath + group key` columns:
+
+```bash
+marcussen parse --root "Marcussen 1945-1975_FLAC_Dataset" --out outputs/parsed_group_keys.csv
+```
+
+Run within-group pairwise comparisons (streamed row-by-row to CSV):
+
+```bash
+marcussen compare --root "Marcussen 1945-1975_FLAC_Dataset" --out outputs/pairs.csv --metric placeholder
+```
+
+Run a short debug compare and stop after the first 20 pairs:
+
+```bash
+marcussen compare --root "Marcussen 1945-1975_FLAC_Dataset" --out outputs/pairs_debug_20.csv --metric placeholder --max-pairs 20
+```
+
+## Notes
+
+- Filename parsing is tolerant: it collects warnings and unknown tokens instead of failing.
+- Default comparison classes are keyed by `family`, `registration_raw`, `division`, `pitch`, and `mic_location`.
+- Comparisons are run within those classes, and only across different `organ_id` values.
+- `librosa` is required in this project for audio loading and low-level audio processing.

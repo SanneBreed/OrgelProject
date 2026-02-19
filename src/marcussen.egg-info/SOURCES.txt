@@ -1,0 +1,15 @@
+README.md
+pyproject.toml
+src/marcussen/__init__.py
+src/marcussen/audio.py
+src/marcussen/cli.py
+src/marcussen/compare.py
+src/marcussen/constants.py
+src/marcussen/dataset.py
+src/marcussen/parsing.py
+src/marcussen.egg-info/PKG-INFO
+src/marcussen.egg-info/SOURCES.txt
+src/marcussen.egg-info/dependency_links.txt
+src/marcussen.egg-info/entry_points.txt
+src/marcussen.egg-info/requires.txt
+src/marcussen.egg-info/top_level.txt

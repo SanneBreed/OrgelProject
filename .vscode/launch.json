@@ -1,0 +1,65 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Marcussen: Parse -> CSV",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/.venv/bin/python",
+      "module": "marcussen.cli",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}/src",
+        "MARCUSSEN_DATASET_ROOT": "${workspaceFolder}/Marcussen 1945-1975_FLAC_Dataset"
+      },
+      "args": [
+        "parse",
+        "--out",
+        "outputs/parsed_group_keys.csv"
+      ]
+    },
+    {
+      "name": "Marcussen: Compare Within Group Pairs",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/.venv/bin/python",
+      "module": "marcussen.cli",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}/src",
+        "MARCUSSEN_DATASET_ROOT": "${workspaceFolder}/Marcussen 1945-1975_FLAC_Dataset"
+      },
+      "args": [
+        "compare",
+        "--out",
+        "outputs/pairs.csv",
+        "--metric",
+        "placeholder"
+      ]
+    },
+    {
+      "name": "Marcussen: Compare First 20 Pairs (Debug)",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/.venv/bin/python",
+      "module": "marcussen.cli",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}/src",
+        "MARCUSSEN_DATASET_ROOT": "${workspaceFolder}/Marcussen 1945-1975_FLAC_Dataset"
+      },
+      "args": [
+        "compare",
+        "--out",
+        "outputs/pairs_debug_20.csv",
+        "--metric",
+        "placeholder",
+        "--max-pairs",
+        "20"
+      ]
+    }
+  ]
+}

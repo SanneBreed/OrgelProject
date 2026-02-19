@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "marcussen"
+version = "0.1.0"
+description = "Utilities for parsing and comparing Marcussen organ recording datasets"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "numpy>=1.24",
+  "soundfile>=0.12",
+  "fadtk",
+  "tqdm>=4.66",
+]
+
+[project.optional-dependencies]
+librosa = ["librosa>=0.10"]
+
+[project.scripts]
+marcussen = "marcussen.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
