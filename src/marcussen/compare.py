@@ -15,6 +15,11 @@ from tqdm.auto import tqdm
 from .dataset import MarcussenDataset
 from .parsing import ParsedItem
 
+import re
+import tempfile
+import shutil
+import subprocess
+
 logger = logging.getLogger(__name__)
 
 
@@ -31,6 +36,54 @@ def _placeholder_distance(item_a: ParsedItem, item_b: ParsedItem) -> float:
     return 999.0
 
 
+def _fad_distance(item_a: ParsedItem, item_b: ParsedItem) -> float:
+    """
+    Compute Frechet Audio Distance using FADTK and CLAP LAION music model.
+    """
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir = Path(tmpdir)
+
+        dir_a = tmpdir / "a"
+        dir_b = tmpdir / "b"
+        dir_a.mkdir()
+        dir_b.mkdir()
+
+        shutil.copy(item_a.path, dir_a / Path(item_a.path).name)
+        shutil.copy(item_b.path, dir_b / Path(item_b.path).name)
+
+        cmd = [
+            "fadtk",
+            "clap-laion-music",
+            str(dir_a),
+            str(dir_b),
+            "--workers",
+            "1",  # IMPORTANT for Windows stability
+        ]
+
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+        )
+
+        output = result.stdout + "\n" + result.stderr
+
+        if result.returncode != 0:
+            raise RuntimeError(f"FADTK failed:\n{output}")
+
+        # Look specifically for the printed score line
+        match = re.search(
+            r"score between .* is:\s*([-+]?\d*\.\d+|\d+)",
+            output
+        )
+
+        if not match:
+            raise ValueError(f"Could not parse FAD score.\nFull output:\n{output}")
+
+        return float(match.group(1))
+
+
 def compare_pair(item_a: ParsedItem, item_b: ParsedItem, metric: str = "placeholder") -> float:
     """Compute one pairwise comparison score."""
     family = item_a.meta.get("family", "_")
@@ -42,9 +95,13 @@ def compare_pair(item_a: ParsedItem, item_b: ParsedItem, metric: str = "placehol
         organ_a,
         organ_b,
     )
-    if metric != "placeholder":
-        raise ValueError(f"Unsupported metric: {metric!r}")
-    return _placeholder_distance(item_a, item_b)
+    if metric == "placeholder":
+        return _placeholder_distance(item_a, item_b)
+
+    if metric == "fad_clap_music":
+        return _fad_distance(item_a, item_b)
+
+    raise ValueError(f"Unsupported metric: {metric!r}")
 
 
 def _is_cross_organ_pair(item_a: ParsedItem, item_b: ParsedItem) -> bool:

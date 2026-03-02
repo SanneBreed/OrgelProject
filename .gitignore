@@ -3,3 +3,5 @@
 /outputs/
 .venv/
 __pycache__/
+/testA
+/testB

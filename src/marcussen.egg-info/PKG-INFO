@@ -7,6 +7,7 @@ Description-Content-Type: text/markdown
 Requires-Dist: numpy>=1.24
 Requires-Dist: soundfile>=0.12
 Requires-Dist: fadtk
+Requires-Dist: tqdm>=4.66
 Provides-Extra: librosa
 Requires-Dist: librosa>=0.10; extra == "librosa"
 
@@ -86,6 +87,12 @@ Run within-group pairwise comparisons (streamed row-by-row to CSV):
 
 ```bash
 marcussen compare --root "Marcussen 1945-1975_FLAC_Dataset" --out outputs/pairs.csv --metric placeholder
+```
+
+Run a short debug compare and stop after the first 20 pairs:
+
+```bash
+marcussen compare --root "Marcussen 1945-1975_FLAC_Dataset" --out outputs/pairs_debug_20.csv --metric placeholder --max-pairs 20
 ```
 
 ## Notes
