@@ -114,6 +114,11 @@ def parse_filename(path_like: str) -> ParsedItem:
         meta["mic_location"] = str(parsed["distance"])
     if "pitch" in parsed:
         meta["pitch"] = str(parsed["pitch"])
+        
+    if "normalised" in str(path_obj).lower():
+        meta["normalisation"] = "yes"
+    else:
+        meta["normalisation"] = "no"
 
     if not tokens:
         warnings.append("No tokens found in filename stem")

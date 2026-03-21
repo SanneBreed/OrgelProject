@@ -18,6 +18,7 @@ DEFAULT_GROUP_KEYS: tuple[str, ...] = (
     "division",
     "pitch",
     "mic_location",
+    "normalisation",
 )
 
 SKIP_FILENAME_SUBSTRINGS: tuple[str, ...] = ("aanspraaktest",)
