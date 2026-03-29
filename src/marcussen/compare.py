@@ -36,7 +36,7 @@ def _placeholder_distance(item_a: ParsedItem, item_b: ParsedItem) -> float:
     return 999.0
 
 
-def _fad_distance(item_a: ParsedItem, item_b: ParsedItem) -> float:
+def _fad_clap_music_distance(item_a: ParsedItem, item_b: ParsedItem) -> float:
     """
     Compute Frechet Audio Distance using FADTK and CLAP LAION music model.
     """
@@ -55,6 +55,100 @@ def _fad_distance(item_a: ParsedItem, item_b: ParsedItem) -> float:
         cmd = [
             "fadtk",
             "clap-laion-music",
+            str(dir_a),
+            str(dir_b),
+            "--workers",
+            "1",  # IMPORTANT for Windows stability
+        ]
+
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+        )
+
+        output = result.stdout + "\n" + result.stderr
+
+        if result.returncode != 0:
+            raise RuntimeError(f"FADTK failed:\n{output}")
+
+        # Look specifically for the printed score line
+        match = re.search(
+            r"score between .* is:\s*([-+]?\d*\.\d+|\d+)",
+            output
+        )
+
+        if not match:
+            raise ValueError(f"Could not parse FAD score.\nFull output:\n{output}")
+
+        return float(match.group(1))
+    
+def _fad_clap_audio_distance(item_a: ParsedItem, item_b: ParsedItem) -> float:
+    """
+    Compute Frechet Audio Distance using FADTK and CLAP LAION audio model.
+    """
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir = Path(tmpdir)
+
+        dir_a = tmpdir / "a"
+        dir_b = tmpdir / "b"
+        dir_a.mkdir()
+        dir_b.mkdir()
+
+        shutil.copy(item_a.path, dir_a / Path(item_a.path).name)
+        shutil.copy(item_b.path, dir_b / Path(item_b.path).name)
+
+        cmd = [
+            "fadtk",
+            "clap-laion-audio",
+            str(dir_a),
+            str(dir_b),
+            "--workers",
+            "1",  # IMPORTANT for Windows stability
+        ]
+
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+        )
+
+        output = result.stdout + "\n" + result.stderr
+
+        if result.returncode != 0:
+            raise RuntimeError(f"FADTK failed:\n{output}")
+
+        # Look specifically for the printed score line
+        match = re.search(
+            r"score between .* is:\s*([-+]?\d*\.\d+|\d+)",
+            output
+        )
+
+        if not match:
+            raise ValueError(f"Could not parse FAD score.\nFull output:\n{output}")
+
+        return float(match.group(1))
+
+def _fad_vggish_distance(item_a: ParsedItem, item_b: ParsedItem) -> float:
+    """
+    Compute Frechet Audio Distance using FADTK and VGGISH model.
+    """
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir = Path(tmpdir)
+
+        dir_a = tmpdir / "a"
+        dir_b = tmpdir / "b"
+        dir_a.mkdir()
+        dir_b.mkdir()
+
+        shutil.copy(item_a.path, dir_a / Path(item_a.path).name)
+        shutil.copy(item_b.path, dir_b / Path(item_b.path).name)
+
+        cmd = [
+            "fadtk",
+            "vggish",
             str(dir_a),
             str(dir_b),
             "--workers",
@@ -146,7 +240,13 @@ def compare_pair(item_a: ParsedItem, item_b: ParsedItem, metric: str = "placehol
         return _placeholder_distance(item_a, item_b)
 
     if metric == "fad_clap_music":
-        return _fad_distance(item_a, item_b)
+        return _fad_clap_music_distance(item_a, item_b)
+    
+    if metric == "fad_clap_audio":
+        return _fad_clap_audio_distance(item_a, item_b)
+
+    if metric == "fad_vggish":
+        return _fad_vggish_distance(item_a, item_b)
     
     if metric == "fad_mert_95m":
         return _fad_mert_distance(item_a, item_b)

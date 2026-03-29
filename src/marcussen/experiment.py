@@ -47,7 +47,7 @@ output_csv.parent.mkdir(exist_ok=True, parents=True)
 result = run_within_group(
     dataset=filtered_dataset,
     out_csv_path=output_csv,
-    metric="fad_mert_95m",
+    metric="fad_clap_audio",
     max_pairs=None
 )
 
