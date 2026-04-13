@@ -3,6 +3,7 @@
 /outputs/
 .DS_Store
 .venv/
+.venv-webmushra/
 __pycache__/
 /testA
 /testB

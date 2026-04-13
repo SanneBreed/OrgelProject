@@ -106,6 +106,27 @@
         "--normalize",
         "--debug-first-50-per-batch"
       ]
+    },
+    {
+      "name": "webMUSHRA: Generate Batch YAMLs",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/.venv-webmushra/bin/python",
+      "program": "${workspaceFolder}/scripts/generate_webmushra_ab_batches.py",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "webMUSHRA: Serve Batch 01",
+      "type": "node-terminal",
+      "request": "launch",
+      "command": "php -S localhost:8000",
+      "cwd": "${workspaceFolder}/src/webMUSHRA",
+      "serverReadyAction": {
+        "pattern": "Development Server \\(http://localhost:8000\\) started",
+        "uriFormat": "http://localhost:8000/?config=marcussen_batches/marcussen_batch_01.yaml",
+        "action": "openExternally"
+      }
     }
   ]
 }
