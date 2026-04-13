@@ -1,6 +1,7 @@
 /Marcussen 1945-1975_FLAC_Dataset.zip
 /Marcussen 1945-1975_FLAC_Dataset/
 /outputs/
+.DS_Store
 .venv/
 __pycache__/
 /testA

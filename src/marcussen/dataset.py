@@ -18,7 +18,6 @@ DEFAULT_GROUP_KEYS: tuple[str, ...] = (
     "division",
     "pitch",
     "mic_location",
-    "normalisation",
 )
 
 SKIP_FILENAME_SUBSTRINGS: tuple[str, ...] = ("aanspraaktest",)
@@ -46,9 +45,12 @@ class MarcussenDataset:
 
     root: str | Path
     group_keys: list[str] = field(default_factory=lambda: list(DEFAULT_GROUP_KEYS))
+    mic_location_filter: str | None = None
 
     def __post_init__(self) -> None:
         self.root = Path(self.root)
+        if self.mic_location_filter is not None:
+            self.mic_location_filter = self.mic_location_filter.lower()
         self._items: list[ParsedItem] | None = None
 
     def _scan(self) -> list[ParsedItem]:
@@ -67,7 +69,21 @@ class MarcussenDataset:
             len(files),
             len(kept_files),
         )
-        return [parse_filename(str(path)) for path in kept_files]
+        parsed_items = [parse_filename(str(path)) for path in kept_files]
+        if self.mic_location_filter is None:
+            return parsed_items
+
+        filtered_items = [
+            item
+            for item in parsed_items
+            if str(item.meta.get("mic_location", "")).lower() == self.mic_location_filter
+        ]
+        logger.info(
+            "Applied mic_location filter %r, keeping %d parsed file(s)",
+            self.mic_location_filter,
+            len(filtered_items),
+        )
+        return filtered_items
 
     def _ensure_scanned(self) -> None:
         if self._items is None:

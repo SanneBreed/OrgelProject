@@ -15,6 +15,7 @@
       },
       "args": [
         "parse",
+        "--close-only",
         "--out",
         "outputs/parsed_group_keys.csv"
       ]
@@ -33,6 +34,7 @@
       },
       "args": [
         "compare",
+        "--close-only",
         "--out",
         "outputs/pairs.csv",
         "--metric",
@@ -53,12 +55,56 @@
       },
       "args": [
         "compare",
+        "--close-only",
         "--out",
         "outputs/pairs_debug_20.csv",
         "--metric",
         "placeholder",
         "--max-pairs",
         "20"
+      ]
+    },
+    {
+      "name": "Marcussen: Prepare Listening Dataset",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/.venv/bin/python",
+      "module": "marcussen.cli",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}/src",
+        "MARCUSSEN_DATASET_ROOT": "${workspaceFolder}/Marcussen 1945-1975_FLAC_Dataset"
+      },
+      "args": [
+        "prepare_listening_dataset",
+        "--close-only",
+        "--out-dir",
+        "outputs/listening_experiment_pairs",
+        "--trim",
+        "--normalize"
+      ]
+    },
+    {
+      "name": "Marcussen: Prepare Listening Dataset (Debug First 50 Per Batch)",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/.venv/bin/python",
+      "module": "marcussen.cli",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}/src",
+        "MARCUSSEN_DATASET_ROOT": "${workspaceFolder}/Marcussen 1945-1975_FLAC_Dataset"
+      },
+      "args": [
+        "prepare_listening_dataset",
+        "--close-only",
+        "--out-dir",
+        "outputs/listening_experiment_pairs_debug",
+        "--trim",
+        "--normalize",
+        "--debug-first-50-per-batch"
       ]
     }
   ]

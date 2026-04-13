@@ -13,6 +13,10 @@ from .dataset import MarcussenDataset, make_group_id
 logger = logging.getLogger(__name__)
 
 
+def _make_dataset(root: Path, *, close_only: bool = False) -> MarcussenDataset:
+    return MarcussenDataset(root=root, mic_location_filter="close" if close_only else None)
+
+
 def _resolve_root(root_arg: str | None) -> Path:
     root_value = root_arg or os.getenv("MARCUSSEN_DATASET_ROOT")
     if not root_value:
@@ -107,7 +111,7 @@ def _write_group_key_csv(dataset: MarcussenDataset, out_path: Path) -> int:
 
 def _cmd_index(args: argparse.Namespace) -> int:
     root = _resolve_root(args.root)
-    dataset = MarcussenDataset(root=root)
+    dataset = _make_dataset(root, close_only=args.close_only)
     out = Path(args.out)
     count = _write_index_csv(dataset, out)
     print(f"Indexed {count} files -> {out}")
@@ -116,7 +120,7 @@ def _cmd_index(args: argparse.Namespace) -> int:
 
 def _cmd_parse(args: argparse.Namespace) -> int:
     root = _resolve_root(args.root)
-    dataset = MarcussenDataset(root=root)
+    dataset = _make_dataset(root, close_only=args.close_only)
     out = Path(args.out)
     count = _write_group_key_csv(dataset, out)
     print(f"Parsed {count} files -> {out}")
@@ -125,7 +129,7 @@ def _cmd_parse(args: argparse.Namespace) -> int:
 
 def _cmd_sample(args: argparse.Namespace) -> int:
     root = _resolve_root(args.root)
-    dataset = MarcussenDataset(root=root)
+    dataset = _make_dataset(root, close_only=args.close_only)
     sampled = dataset.sample(n=args.n, seed=args.seed)
     for item in sampled:
         group_id = make_group_id(item.meta, dataset.group_keys)
@@ -138,7 +142,7 @@ def _cmd_compare(args: argparse.Namespace) -> int:
     from .compare import run_within_group
 
     root = _resolve_root(args.root)
-    dataset = MarcussenDataset(root=root)
+    dataset = _make_dataset(root, close_only=args.close_only)
     summary = run_within_group(
         dataset,
         out_csv_path=args.out,
@@ -148,6 +152,30 @@ def _cmd_compare(args: argparse.Namespace) -> int:
     print(
         "Compared within groups: "
         f"groups={summary['groups']} rows={summary['rows']} errors={summary['errors']} out={summary['out_csv']}"
+    )
+    return 0
+
+
+def _cmd_prepare_listening_dataset(args: argparse.Namespace) -> int:
+    from .listening_dataset import prepare_listening_dataset
+
+    root = _resolve_root(args.root)
+    dataset = _make_dataset(root, close_only=args.close_only)
+    summary = prepare_listening_dataset(
+        dataset,
+        out_dir=args.out_dir,
+        csv_name=args.csv_name,
+        max_pairs=args.max_pairs,
+        expand_toots=True,
+        trim=args.trim,
+        normalize=args.normalize,
+        steady_state_seconds=args.steady_state_seconds,
+        debug_first_n_per_batch=50 if args.debug_first_50_per_batch else None,
+    )
+    print(
+        "Prepared listening dataset: "
+        f"groups={summary['groups']} rows={summary['rows']} wav_files={summary['wav_files']} "
+        f"out={summary['out_dir']} csv={summary['out_csv']}"
     )
     return 0
 
@@ -162,6 +190,11 @@ def build_parser() -> argparse.ArgumentParser:
     index_parser = subparsers.add_parser("index", help="Scan dataset and write parsed index CSV")
     index_parser.add_argument("--root", type=str, default=None, help="Dataset root path")
     index_parser.add_argument("--out", type=str, required=True, help="Output CSV path")
+    index_parser.add_argument(
+        "--close-only",
+        action="store_true",
+        help="Only include recordings with mic_location=CLOSE",
+    )
     index_parser.set_defaults(func=_cmd_index)
 
     parse_parser = subparsers.add_parser(
@@ -170,12 +203,22 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parse_parser.add_argument("--root", type=str, default=None, help="Dataset root path")
     parse_parser.add_argument("--out", type=str, required=True, help="Output CSV path")
+    parse_parser.add_argument(
+        "--close-only",
+        action="store_true",
+        help="Only include recordings with mic_location=CLOSE",
+    )
     parse_parser.set_defaults(func=_cmd_parse)
 
     sample_parser = subparsers.add_parser("sample", help="Print random sample of parsed items")
     sample_parser.add_argument("--root", type=str, default=None, help="Dataset root path")
     sample_parser.add_argument("--n", type=int, default=2, help="Number of samples")
     sample_parser.add_argument("--seed", type=int, default=None, help="Random seed")
+    sample_parser.add_argument(
+        "--close-only",
+        action="store_true",
+        help="Only include recordings with mic_location=CLOSE",
+    )
     sample_parser.set_defaults(func=_cmd_sample)
 
     compare_parser = subparsers.add_parser("compare", help="Run within-group comparisons")
@@ -183,12 +226,63 @@ def build_parser() -> argparse.ArgumentParser:
     compare_parser.add_argument("--out", type=str, required=True, help="Output pair CSV path")
     compare_parser.add_argument("--metric", type=str, default="placeholder", help="Comparison metric")
     compare_parser.add_argument(
+        "--close-only",
+        action="store_true",
+        help="Only include recordings with mic_location=CLOSE",
+    )
+    compare_parser.add_argument(
         "--max-pairs",
         type=int,
         default=None,
         help="Stop after writing this many pairs (global cap, useful for debugging)",
     )
     compare_parser.set_defaults(func=_cmd_compare)
+
+    prepare_parser = subparsers.add_parser(
+        "prepare_listening_dataset",
+        help="Write toot-level listening-test pairs plus WAV exports, including same-organ controls",
+    )
+    prepare_parser.add_argument("--root", type=str, default=None, help="Dataset root path")
+    prepare_parser.add_argument("--out-dir", type=str, required=True, help="Output directory")
+    prepare_parser.add_argument(
+        "--close-only",
+        action="store_true",
+        help="Only include recordings with mic_location=CLOSE",
+    )
+    prepare_parser.add_argument(
+        "--csv-name",
+        type=str,
+        default="pairs.csv",
+        help="CSV filename within the output directory",
+    )
+    prepare_parser.add_argument(
+        "--max-pairs",
+        type=int,
+        default=None,
+        help="Stop after writing this many pairs (global cap, useful for debugging)",
+    )
+    prepare_parser.add_argument(
+        "--trim",
+        action="store_true",
+        help="Trim leading and trailing silence from exported audio",
+    )
+    prepare_parser.add_argument(
+        "--normalize",
+        action="store_true",
+        help="Peak-normalize exported audio",
+    )
+    prepare_parser.add_argument(
+        "--steady-state-seconds",
+        type=float,
+        default=None,
+        help="Export a centered steady-state window of this duration in seconds",
+    )
+    prepare_parser.add_argument(
+        "--debug-first-50-per-batch",
+        action="store_true",
+        help="Debug mode: only write the first 50 pair rows from each batch",
+    )
+    prepare_parser.set_defaults(func=_cmd_prepare_listening_dataset)
 
     return parser
 

@@ -58,3 +58,11 @@ def load_audio(path: str | Path, sr: int | None = None, mono: bool = False) -> t
         out_sr = sr
 
     return y, out_sr
+
+
+def write_wav(path: str | Path, y: np.ndarray, sr: int) -> None:
+    """Write waveform data to a WAV file."""
+    sf = _require_soundfile()
+    out_path = Path(path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    sf.write(str(out_path), np.asarray(y, dtype=np.float32), sr, format="WAV")

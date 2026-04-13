@@ -2,18 +2,17 @@
 
 from __future__ import annotations
 
-from collections import Counter
 import csv
-from itertools import combinations
 import logging
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 import librosa
 from tqdm.auto import tqdm
 
 from .dataset import MarcussenDataset
 from .parsing import ParsedItem
+from .pairs import cross_organ_pair_count, iter_cross_organ_pairs
 
 import re
 import tempfile
@@ -254,33 +253,6 @@ def compare_pair(item_a: ParsedItem, item_b: ParsedItem, metric: str = "placehol
     raise ValueError(f"Unsupported metric: {metric!r}")
 
 
-def _is_cross_organ_pair(item_a: ParsedItem, item_b: ParsedItem) -> bool:
-    organ_a = item_a.meta.get("organ_id")
-    organ_b = item_b.meta.get("organ_id")
-    return organ_a not in (None, "") and organ_b not in (None, "") and organ_a != organ_b
-
-
-def _iter_pairs(
-    items: list[ParsedItem],
-) -> Iterator[tuple[ParsedItem, ParsedItem]]:
-    yield from (
-        (item_a, item_b)
-        for item_a, item_b in combinations(items, 2)
-        if _is_cross_organ_pair(item_a, item_b)
-    )
-
-
-def _cross_organ_pair_count(items: list[ParsedItem]) -> int:
-    counts = Counter(
-        str(item.meta["organ_id"])
-        for item in items
-        if item.meta.get("organ_id") not in (None, "")
-    )
-    total = sum(counts.values())
-    same_organ_pairs = sum(count * count for count in counts.values())
-    return (total * total - same_organ_pairs) // 2
-
-
 def run_within_group(
     dataset: MarcussenDataset,
     out_csv_path: str | Path,
@@ -317,7 +289,7 @@ def run_within_group(
     error_rows = 0
     considered_groups = 0
     total_pairs_available = sum(
-        _cross_organ_pair_count(items)
+        cross_organ_pair_count(items)
         for items in grouped.values()
         if len(items) >= 2
     )
@@ -339,7 +311,7 @@ def run_within_group(
                     break
 
                 considered_groups += 1
-                for item_a, item_b in _iter_pairs(items):
+                for item_a, item_b in iter_cross_organ_pairs(items):
                     if max_pairs is not None and rows_written >= max_pairs:
                         break
                     row = {
