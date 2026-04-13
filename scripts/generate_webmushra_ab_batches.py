@@ -509,9 +509,9 @@ def main() -> int:
     main_batches = _distribute_rows(main_rows, main_targets, rng, group_key=lambda row: row.trial_group_key)
     control_batches = _distribute_rows(control_rows, control_targets, rng, group_key=lambda row: row.trial_group_key)
 
+    if args.output_dir.exists():
+        shutil.rmtree(args.output_dir)
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    for stale_yaml_path in args.output_dir.glob("marcussen_batch_*.yaml"):
-        stale_yaml_path.unlink()
 
     assignments_by_batch: list[list[TrialAssignment]] = []
     for batch_index in range(args.batch_count):
