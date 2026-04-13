@@ -1,0 +1,3 @@
+[submodule "src/webMUSHRA"]
+	path = src/webMUSHRA
+	url = git@github.com:w4iei/webMUSHRA.git

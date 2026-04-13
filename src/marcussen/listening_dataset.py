@@ -159,11 +159,13 @@ def _make_csv_row(
     item_a: ListeningDatasetItem,
     item_b: ListeningDatasetItem,
     *,
+    pair_id: int,
     batch: str,
     dataset: MarcussenDataset,
 ) -> dict[str, Any]:
     output_meta = _output_meta(item_a)
     return {
+        "pair_id": pair_id,
         "family": output_meta.get("family", ""),
         "division": output_meta.get("division", ""),
         "registration_raw": item_a.meta.get("registration_raw", ""),
@@ -260,6 +262,7 @@ def prepare_listening_dataset(
     grouped = dataset.class_groups()
 
     fieldnames = [
+        "pair_id",
         "family",
         "division",
         "registration_raw",
@@ -350,7 +353,15 @@ def prepare_listening_dataset(
                                 considered_groups += 1
                                 group_has_rows = True
 
-                            writer.writerow(_make_csv_row(item_a, item_b, batch=batch, dataset=dataset))
+                            writer.writerow(
+                                _make_csv_row(
+                                    item_a,
+                                    item_b,
+                                    pair_id=rows_written + 1,
+                                    batch=batch,
+                                    dataset=dataset,
+                                )
+                            )
                             referenced_wav_paths.add(item_a.toot_wav_path_rel)
                             referenced_wav_paths.add(item_b.toot_wav_path_rel)
                             rows_written += 1
@@ -383,6 +394,7 @@ def prepare_listening_dataset(
                                     _make_csv_row(
                                         item_a,
                                         item_b,
+                                        pair_id=rows_written + 1,
                                         batch=SAME_ORGAN_CONTROL_BATCH,
                                         dataset=dataset,
                                     )
