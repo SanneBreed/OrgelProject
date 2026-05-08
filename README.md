@@ -114,10 +114,16 @@ Useful `prepare_listening_dataset` options:
 `prepare_listening_dataset` uses the audio-prep pipeline in `src/marcussen/audio_prep.py` to transform each source recording before export.
 
 - Source files are loaded from FLAC and written back out as WAV.
+- Before export, the pipeline estimates one global tuning offset per organ.
+- For each organ, it uses the fixed tuning reference set `P8` / `Main Division` / `CLOSE` at pitches `C`, `c0`, `c1`, `c2`, and `c3`, estimates a wrapped cents offset for each one, and records those measurements in `organ_tuning_offsets.csv`.
+- The median of those five wrapped offsets becomes that organ's global tuning offset.
+- Each organ is then pitch-shifted by the negative of its own median offset so it is corrected directly toward the expected note center.
 - When toot expansion is enabled, the prep pipeline detects up to three toot regions in each source recording.
 - The listening-dataset export currently keeps `toot_1` for cross-organ comparisons and uses `toot_1` plus `toot_2` to build same-organ control pairs.
+- The per-clip processing order is: toot detection, optional trim, optional steady-state extraction, pitch correction, optional normalization, WAV write.
+- Pitch correction uses `librosa.effects.pitch_shift`.
 - Exported filenames include the toot index and any enabled processing steps.
-- The output CSV records the exported WAV paths, source toot indices, batch, and `processing_chain` for each pair.
+- The output CSV records the exported WAV paths, source toot indices, batch, and `processing_chain` for each pair, and the output directory also contains `organ_tuning_offsets.csv` with the selected per-organ reference measurements.
 
 ## Notes
 
@@ -125,5 +131,5 @@ Useful `prepare_listening_dataset` options:
 - Default comparison classes are keyed by `family`, `registration_raw`, `division`, `pitch`, and `mic_location`.
 - Comparisons are run within those classes, and only across different `organ_id` values.
 - `librosa` is required in this project for audio loading and low-level audio processing.
-- `prepare_listening_dataset` uses reusable audio-prep functions to detect toots, trim clips, extract steady-state windows, normalize audio, and write WAV exports.
+- `prepare_listening_dataset` uses reusable audio-prep functions to detect toots, trim clips, extract steady-state windows, estimate organ tuning offsets, pitch-correct audio, normalize audio, and write WAV exports.
 - The listening-dataset CSV groups exported pairs by batch, records which toot index from each source file was used, and appends same-organ control pairs at the end.

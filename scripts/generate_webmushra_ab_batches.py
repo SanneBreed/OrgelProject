@@ -1,14 +1,19 @@
 #!/usr/bin/env python3
-"""Generate webMUSHRA paired-comparison batch configs from Marcussen pair CSVs.
+"""Generate webMUSHRA paired-distance batch configs from Marcussen pairs.csv.
 
-This script reads the listening-dataset `pairs.csv` produced by the Marcussen
-pipeline and writes one webMUSHRA YAML config per batch. The generated configs
-assume the exported `wav/` directory is copied under the webMUSHRA asset root,
-which defaults to `configs/resources/audio/`.
+The input CSV is expected to contain explicit pair roles:
 
-The main experiment rows are the cross-organ pairs (`same_organ_pair == False`).
-Each batch also receives a small number of randomly selected same-organ control
-pairs to act as sanity checks.
+- `cross_organ_main`
+- `same_pipe_reference`
+- `same_organ_anchor`
+
+Each generated batch contains:
+
+- one non-saved same-pipe practice example after the volume page
+- one non-saved same-organ anchor practice example after that
+- the scored main trials
+- two scored same-pipe hidden references
+- two scored same-organ hidden anchors
 """
 
 from __future__ import annotations
@@ -28,9 +33,31 @@ DEFAULT_INPUT_CSV = Path("outputs/listening_experiment_pairs/pairs.csv")
 DEFAULT_OUTPUT_DIR = Path("src/webMUSHRA/configs/marcussen_batches")
 DEFAULT_ASSET_PREFIX = "configs/resources/audio/marcussen_batches"
 DEFAULT_BATCH_COUNT = 20
-DEFAULT_CONTROL_MIN = 3
-DEFAULT_CONTROL_MAX = 3
+DEFAULT_SAME_PIPE_PER_BATCH = 2
+DEFAULT_SAME_ORGAN_ANCHOR_PER_BATCH = 2
+DEFAULT_DEMO_SAME_PIPE_PER_BATCH = 1
+DEFAULT_DEMO_SAME_ORGAN_ANCHOR_PER_BATCH = 1
 DEFAULT_SEED = 20260413
+DEFAULT_SHORT_DEMO_TRIAL_COUNT = 10
+
+PAIR_ROLE_CROSS_ORGAN_MAIN = "cross_organ_main"
+PAIR_ROLE_SAME_PIPE_REFERENCE = "same_pipe_reference"
+PAIR_ROLE_SAME_ORGAN_ANCHOR = "same_organ_anchor"
+
+
+def _parse_bool(value: str) -> bool:
+    return str(value or "").strip().lower() == "true"
+
+
+def _infer_pair_role(row: dict[str, str]) -> str:
+    explicit = str(row.get("pair_role", "")).strip()
+    if explicit:
+        return explicit
+    if _parse_bool(row.get("same_organ_anchor", "")) or row.get("batch", "") == "same_organ_anchor":
+        return PAIR_ROLE_SAME_ORGAN_ANCHOR
+    if _parse_bool(row.get("same_pipe_reference", "")) or _parse_bool(row.get("same_organ_pair", "")):
+        return PAIR_ROLE_SAME_PIPE_REFERENCE
+    return PAIR_ROLE_CROSS_ORGAN_MAIN
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,6 +71,18 @@ class PairRow:
     registration_raw: str
     pitch: str
     mic_location: str
+    family_a: str
+    family_b: str
+    division_a: str
+    division_b: str
+    registration_raw_a: str
+    registration_raw_b: str
+    pitch_a: str
+    pitch_b: str
+    mic_location_a: str
+    mic_location_b: str
+    foot_length_a: str
+    foot_length_b: str
     organ_a: str
     organ_b: str
     source_path_a: str
@@ -54,41 +93,61 @@ class PairRow:
     source_a_toot_index: str
     source_b_toot_index: str
     same_organ_pair: bool
+    same_organ: bool
+    same_pipe_reference: bool
+    same_organ_anchor: bool
+    pair_role: str
     processing_chain: str
     group_id: str
+    pair_group_id: str
 
     @property
     def trial_group_key(self) -> str:
-        return self.group_id or "|".join(
+        return self.pair_group_id or self.group_id or "|".join(
             (
-                self.family,
-                self.division,
-                self.registration_raw,
-                self.pitch,
-                self.mic_location,
+                self.pair_role,
+                self.family_a,
+                self.family_b,
+                self.division_a,
+                self.division_b,
+                self.registration_raw_a,
+                self.registration_raw_b,
+                self.pitch_a,
+                self.pitch_b,
+                self.mic_location_a,
+                self.mic_location_b,
+                self.organ_a,
+                self.organ_b,
             )
         )
 
 
 @dataclass(frozen=True, slots=True)
-class TrialAssignment:
-    """A batch-local trial with a chosen reference orientation."""
+class PageAssignment:
+    """A batch-local page with a deterministic left/right item order."""
 
     batch_index: int
-    trial_index: int
+    page_kind: str
+    page_index: int
     pair_row: PairRow
-    reference_member: str
-    reference_path: str
-    nonreference_path: str
-    reference_source_path: str
-    nonreference_source_path: str
-    reference_organ: str
-    nonreference_organ: str
+    first_member: str
+    first_path: str
+    second_path: str
+    first_source_path: str
+    second_source_path: str
+    first_organ: str
+    second_organ: str
+    store_results: bool
+
+    @property
+    def page_name(self) -> str:
+        prefix = "Trial" if self.store_results else "Example"
+        return f"{prefix} {self.page_index:03d}"
 
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Generate webMUSHRA paired-comparison YAML batches from Marcussen pairs.csv",
+        description="Generate webMUSHRA paired-distance YAML batches from Marcussen pairs.csv",
     )
     parser.add_argument(
         "--pairs-csv",
@@ -118,16 +177,31 @@ def _parse_args() -> argparse.Namespace:
         help=f"Number of webMUSHRA config batches to create (default: {DEFAULT_BATCH_COUNT})",
     )
     parser.add_argument(
-        "--control-min",
+        "--same-pipe-per-batch",
         type=int,
-        default=DEFAULT_CONTROL_MIN,
-        help=f"Minimum same-organ control pairs per batch (default: {DEFAULT_CONTROL_MIN})",
+        default=DEFAULT_SAME_PIPE_PER_BATCH,
+        help=f"Scored same-pipe hidden references per batch (default: {DEFAULT_SAME_PIPE_PER_BATCH})",
     )
     parser.add_argument(
-        "--control-max",
+        "--same-organ-anchor-per-batch",
         type=int,
-        default=DEFAULT_CONTROL_MAX,
-        help=f"Maximum same-organ control pairs per batch (default: {DEFAULT_CONTROL_MAX})",
+        default=DEFAULT_SAME_ORGAN_ANCHOR_PER_BATCH,
+        help=f"Scored same-organ hidden anchors per batch (default: {DEFAULT_SAME_ORGAN_ANCHOR_PER_BATCH})",
+    )
+    parser.add_argument(
+        "--demo-same-pipe-per-batch",
+        type=int,
+        default=DEFAULT_DEMO_SAME_PIPE_PER_BATCH,
+        help=f"Non-saved same-pipe examples per batch (default: {DEFAULT_DEMO_SAME_PIPE_PER_BATCH})",
+    )
+    parser.add_argument(
+        "--demo-same-organ-anchor-per-batch",
+        type=int,
+        default=DEFAULT_DEMO_SAME_ORGAN_ANCHOR_PER_BATCH,
+        help=(
+            "Non-saved same-organ anchor examples per batch "
+            f"(default: {DEFAULT_DEMO_SAME_ORGAN_ANCHOR_PER_BATCH})"
+        ),
     )
     parser.add_argument(
         "--seed",
@@ -145,23 +219,40 @@ def _load_pairs(csv_path: Path) -> list[PairRow]:
             PairRow(
                 row_index=index,
                 pair_id=int(row["pair_id"]),
-                family=row["family"],
-                division=row["division"],
-                registration_raw=row["registration_raw"],
-                pitch=row["pitch"],
-                mic_location=row["mic_location"],
-                organ_a=row["organ_a"],
-                organ_b=row["organ_b"],
-                source_path_a=row["source_path_a"],
-                source_path_b=row["source_path_b"],
-                toot_wav_path_a=row["toot_wav_path_a"],
-                toot_wav_path_b=row["toot_wav_path_b"],
-                batch=row["batch"],
-                source_a_toot_index=row["source_a_toot_index"],
-                source_b_toot_index=row["source_b_toot_index"],
-                same_organ_pair=row["same_organ_pair"].strip().lower() == "true",
-                processing_chain=row["processing_chain"],
-                group_id=row["group_id"],
+                family=row.get("family", ""),
+                division=row.get("division", ""),
+                registration_raw=row.get("registration_raw", ""),
+                pitch=row.get("pitch", ""),
+                mic_location=row.get("mic_location", ""),
+                family_a=row.get("family_a", row.get("family", "")),
+                family_b=row.get("family_b", row.get("family", "")),
+                division_a=row.get("division_a", row.get("division", "")),
+                division_b=row.get("division_b", row.get("division", "")),
+                registration_raw_a=row.get("registration_raw_a", row.get("registration_raw", "")),
+                registration_raw_b=row.get("registration_raw_b", row.get("registration_raw", "")),
+                pitch_a=row.get("pitch_a", row.get("pitch", "")),
+                pitch_b=row.get("pitch_b", row.get("pitch", "")),
+                mic_location_a=row.get("mic_location_a", row.get("mic_location", "")),
+                mic_location_b=row.get("mic_location_b", row.get("mic_location", "")),
+                foot_length_a=row.get("foot_length_a", ""),
+                foot_length_b=row.get("foot_length_b", ""),
+                organ_a=row.get("organ_a", ""),
+                organ_b=row.get("organ_b", ""),
+                source_path_a=row.get("source_path_a", ""),
+                source_path_b=row.get("source_path_b", ""),
+                toot_wav_path_a=row.get("toot_wav_path_a", ""),
+                toot_wav_path_b=row.get("toot_wav_path_b", ""),
+                batch=row.get("batch", ""),
+                source_a_toot_index=row.get("source_a_toot_index", ""),
+                source_b_toot_index=row.get("source_b_toot_index", ""),
+                same_organ_pair=_parse_bool(row.get("same_organ_pair", "")),
+                same_organ=_parse_bool(row.get("same_organ", row.get("same_organ_pair", ""))),
+                same_pipe_reference=_parse_bool(row.get("same_pipe_reference", row.get("same_organ_pair", ""))),
+                same_organ_anchor=_parse_bool(row.get("same_organ_anchor", "")),
+                pair_role=_infer_pair_role(row),
+                processing_chain=row.get("processing_chain", ""),
+                group_id=row.get("group_id", ""),
+                pair_group_id=row.get("pair_group_id", row.get("group_id", "")),
             )
             for index, row in enumerate(reader, start=1)
         ]
@@ -182,18 +273,21 @@ def _batch_targets(total_items: int, batch_count: int, rng: random.Random) -> li
     return targets
 
 
-def _control_targets(
+def _fixed_targets(
+    *,
     available_items: int,
     batch_count: int,
-    minimum: int,
-    maximum: int,
-    rng: random.Random,
+    per_batch: int,
+    label: str,
 ) -> list[int]:
-    if minimum < 0 or maximum < minimum:
-        raise ValueError("control bounds must satisfy 0 <= minimum <= maximum")
-    desired_total = round(batch_count * ((minimum + maximum) / 2.0))
-    total_to_allocate = min(available_items, desired_total, batch_count * maximum)
-    return _batch_targets(total_to_allocate, batch_count, rng)
+    if per_batch < 0:
+        raise ValueError(f"{label} per-batch count must be >= 0")
+    required = batch_count * per_batch
+    if available_items < required:
+        raise ValueError(
+            f"Not enough {label} rows for {batch_count} batches: need {required}, found {available_items}"
+        )
+    return [per_batch] * batch_count
 
 
 def _distribute_rows(
@@ -244,24 +338,24 @@ def _distribute_rows(
     return batches
 
 
-def _join_asset_path(asset_prefix: str, wav_path: str) -> str:
-    return str(Path(asset_prefix) / Path(wav_path))
+def _remaining_rows(rows: list[PairRow], *, used_pair_ids: set[int]) -> list[PairRow]:
+    return [row for row in rows if row.pair_id not in used_pair_ids]
 
 
 def _yaml_scalar(value: object) -> str:
     return json.dumps(value, ensure_ascii=False)
 
 
-def _batch_asset_relpath(asset_prefix: str, batch_number: int, assignment: TrialAssignment, role: str) -> str:
+def _batch_asset_relpath(asset_prefix: str, batch_number: int, assignment: PageAssignment, role: str) -> str:
     return str(
         Path(asset_prefix)
         / f"batch_{batch_number:02d}"
-        / f"trial_{assignment.trial_index:03d}_pair_{assignment.pair_row.pair_id}_{role}.wav"
+        / f"{assignment.page_kind}_{assignment.page_index:03d}_pair_{assignment.pair_row.pair_id}_{role}.wav"
     )
 
 
 def _copy_batch_audio_assets(
-    assignments_by_batch: list[list[TrialAssignment]],
+    pages_by_batch: list[list[PageAssignment]],
     *,
     pairs_csv_path: Path,
     webmushra_root: Path,
@@ -276,16 +370,16 @@ def _copy_batch_audio_assets(
             shutil.rmtree(stale_batch_dir)
 
     copied_files = 0
-    for batch_number, assignments in enumerate(assignments_by_batch, start=1):
+    for batch_number, assignments in enumerate(pages_by_batch, start=1):
         for assignment in assignments:
             copies = [
                 (
-                    source_root / assignment.reference_path,
-                    webmushra_root / _batch_asset_relpath(asset_prefix, batch_number, assignment, "reference"),
+                    source_root / assignment.first_path,
+                    webmushra_root / _batch_asset_relpath(asset_prefix, batch_number, assignment, "item_1"),
                 ),
                 (
-                    source_root / assignment.nonreference_path,
-                    webmushra_root / _batch_asset_relpath(asset_prefix, batch_number, assignment, "candidate"),
+                    source_root / assignment.second_path,
+                    webmushra_root / _batch_asset_relpath(asset_prefix, batch_number, assignment, "item_2"),
                 ),
             ]
             for source_path, destination_path in copies:
@@ -296,91 +390,180 @@ def _copy_batch_audio_assets(
     return copied_files
 
 
-def _trial_content(row: PairRow) -> str:
-    details = [
-        f"Family: {row.family}",
-        f"Division: {row.division}",
-        f"Registration: {row.registration_raw}",
-        f"Pitch: {row.pitch}",
-        f"Microphone: {row.mic_location}",
-    ]
+def _ordered_value(assignment: PageAssignment, a_value: str, b_value: str) -> tuple[str, str]:
+    if assignment.first_member == "a":
+        return a_value, b_value
+    return b_value, a_value
+
+
+def _append_shared_or_ordered(details: list[str], label: str, first_value: str, second_value: str) -> None:
+    if first_value == second_value:
+        if first_value:
+            details.append(f"{label}: {first_value}")
+        return
+    if first_value:
+        details.append(f"{label} item 1: {first_value}")
+    if second_value:
+        details.append(f"{label} item 2: {second_value}")
+
+
+def _trial_content(assignment: PageAssignment) -> str:
+    row = assignment.pair_row
+    family_1, family_2 = _ordered_value(assignment, row.family_a, row.family_b)
+    division_1, division_2 = _ordered_value(assignment, row.division_a, row.division_b)
+    registration_1, registration_2 = _ordered_value(assignment, row.registration_raw_a, row.registration_raw_b)
+    pitch_1, pitch_2 = _ordered_value(assignment, row.pitch_a, row.pitch_b)
+    mic_1, mic_2 = _ordered_value(assignment, row.mic_location_a, row.mic_location_b)
+
+    details: list[str] = []
+    _append_shared_or_ordered(details, "Family", family_1, family_2)
+    _append_shared_or_ordered(details, "Division", division_1, division_2)
+    _append_shared_or_ordered(details, "Registration", registration_1, registration_2)
+    _append_shared_or_ordered(details, "Pitch", pitch_1, pitch_2)
+    _append_shared_or_ordered(details, "Microphone", mic_1, mic_2)
     return "<br/>".join(details)
 
 
-def _trial_id(batch_number: int, assignment: TrialAssignment) -> str:
-    return f"batch{batch_number:02d}_pair{assignment.pair_row.pair_id}_trial{assignment.trial_index:03d}"
+def _page_id(assignment: PageAssignment) -> str:
+    if assignment.store_results:
+        return str(assignment.pair_row.pair_id)
+    return f"{assignment.page_kind}_{assignment.page_index:03d}_pair_{assignment.pair_row.pair_id}"
 
 
-def _intro_content(batch_number: int, trial_count: int) -> str:
+def _page_content(assignment: PageAssignment) -> str:
+    description = _trial_content(assignment)
+    if assignment.store_results:
+        return description
+
+    if assignment.pair_row.pair_role == PAIR_ROLE_SAME_PIPE_REFERENCE:
+        prefix = (
+            "Practice example: these two sounds come from the same pipe, "
+            "so a rating near 1 is expected."
+        )
+    elif assignment.pair_row.pair_role == PAIR_ROLE_SAME_ORGAN_ANCHOR:
+        prefix = (
+            "Practice example: these two sounds come from the same organ but contrasting stops, "
+            "so a high distance rating is expected."
+        )
+    else:
+        prefix = "Practice example."
+    return f"{prefix}<br/><br/>{description}"
+
+
+def _intro_content(batch_number: int, *, trial_count: int, demo_count: int) -> str:
     return (
         f"Marcussen listening test batch {batch_number:02d}.<br/><br/>"
-        "Each trial provides one visible reference and two hidden options, A and B. "
-        "Exactly one of A or B matches the reference. "
-        "Use as many replays as needed, then select which hidden item matches the reference.<br/><br/>"
-        f"This batch contains {trial_count} trials."
+        "Each trial presents two audio files, item 1 and item 2. "
+        "Rate how different they sound on a scale from 1 to 7, where 1 means most similar and 7 means incredibly different.<br/><br/>"
+        "Keyboard shortcuts: <strong>Q</strong> plays item 1, <strong>W</strong> plays item 2, "
+        "<strong>E</strong> plays item 1 then item 2, <strong>Space</strong> pauses playback, "
+        "<strong>1-7</strong> selects the distance rating, and <strong>Cmd/Ctrl+Enter</strong> advances while the comment box is focused.<br/><br/>"
+        f"This batch begins with {demo_count} practice example(s) that are not saved, followed by {trial_count} scored trials."
     )
 
 
-def _assign_trials(
-    batch_rows: list[PairRow],
+def _make_assignment(
+    row: PairRow,
+    *,
+    batch_index: int,
+    page_kind: str,
+    page_index: int,
+    store_results: bool,
+    rng: random.Random,
+) -> PageAssignment:
+    first_member = "a" if rng.random() < 0.5 else "b"
+    if first_member == "a":
+        first_path = row.toot_wav_path_a
+        second_path = row.toot_wav_path_b
+        first_source = row.source_path_a
+        second_source = row.source_path_b
+        first_organ = row.organ_a
+        second_organ = row.organ_b
+    else:
+        first_path = row.toot_wav_path_b
+        second_path = row.toot_wav_path_a
+        first_source = row.source_path_b
+        second_source = row.source_path_a
+        first_organ = row.organ_b
+        second_organ = row.organ_a
+
+    return PageAssignment(
+        batch_index=batch_index,
+        page_kind=page_kind,
+        page_index=page_index,
+        pair_row=row,
+        first_member=first_member,
+        first_path=first_path,
+        second_path=second_path,
+        first_source_path=first_source,
+        second_source_path=second_source,
+        first_organ=first_organ,
+        second_organ=second_organ,
+        store_results=store_results,
+    )
+
+
+def _assign_batch_pages(
+    *,
+    demo_rows: list[PairRow],
+    trial_rows: list[PairRow],
     batch_index: int,
     rng: random.Random,
-) -> list[TrialAssignment]:
-    shuffled_rows = list(batch_rows)
-    rng.shuffle(shuffled_rows)
+) -> list[PageAssignment]:
+    pages: list[PageAssignment] = []
 
-    assignments: list[TrialAssignment] = []
-    for trial_index, row in enumerate(shuffled_rows, start=1):
-        reference_member = "a" if rng.random() < 0.5 else "b"
-        if reference_member == "a":
-            reference_path = row.toot_wav_path_a
-            nonreference_path = row.toot_wav_path_b
-            reference_source = row.source_path_a
-            nonreference_source = row.source_path_b
-            reference_organ = row.organ_a
-            nonreference_organ = row.organ_b
-        else:
-            reference_path = row.toot_wav_path_b
-            nonreference_path = row.toot_wav_path_a
-            reference_source = row.source_path_b
-            nonreference_source = row.source_path_a
-            reference_organ = row.organ_b
-            nonreference_organ = row.organ_a
-
-        assignments.append(
-            TrialAssignment(
+    for demo_index, row in enumerate(demo_rows, start=1):
+        pages.append(
+            _make_assignment(
+                row,
                 batch_index=batch_index,
-                trial_index=trial_index,
-                pair_row=row,
-                reference_member=reference_member,
-                reference_path=reference_path,
-                nonreference_path=nonreference_path,
-                reference_source_path=reference_source,
-                nonreference_source_path=nonreference_source,
-                reference_organ=reference_organ,
-                nonreference_organ=nonreference_organ,
+                page_kind="example",
+                page_index=demo_index,
+                store_results=False,
+                rng=rng,
             )
         )
-    return assignments
+
+    shuffled_trials = list(trial_rows)
+    rng.shuffle(shuffled_trials)
+    for trial_index, row in enumerate(shuffled_trials, start=1):
+        pages.append(
+            _make_assignment(
+                row,
+                batch_index=batch_index,
+                page_kind="trial",
+                page_index=trial_index,
+                store_results=True,
+                rng=rng,
+            )
+        )
+
+    return pages
 
 
 def _render_batch_yaml(
-    assignments: list[TrialAssignment],
+    pages: list[PageAssignment],
     batch_index: int,
     asset_prefix: str,
+    *,
+    test_name: str | None = None,
+    test_id: str | None = None,
 ) -> str:
     batch_number = batch_index + 1
-    batch_id = f"marcussen_batch_{batch_number:02d}"
-    if not assignments:
-        raise ValueError(f"Batch {batch_number:02d} has no trials")
+    batch_id = test_id or f"marcussen_batch_{batch_number:02d}"
+    batch_name = test_name or f"Marcussen AB Batch {batch_number:02d}"
+    if not pages:
+        raise ValueError(f"Batch {batch_number:02d} has no pages")
 
-    volume_stimulus = _batch_asset_relpath(asset_prefix, batch_number, assignments[0], "reference")
+    scored_pages = [page for page in pages if page.store_results]
+    demo_pages = [page for page in pages if not page.store_results]
+    volume_stimulus = _batch_asset_relpath(asset_prefix, batch_number, pages[0], "item_1")
     lines = [
-        f"testname: {_yaml_scalar(f'Marcussen AB Batch {batch_number:02d}')}",
+        f"testname: {_yaml_scalar(batch_name)}",
         f"testId: {_yaml_scalar(batch_id)}",
         "bufferSize: 2048",
         "stopOnErrors: true",
-        "showButtonPreviousPage: false",
+        "showButtonPreviousPage: true",
         "language: \"en\"",
         "remoteService: \"service/write.php\"",
         "",
@@ -388,29 +571,31 @@ def _render_batch_yaml(
         "  - type: generic",
         "    id: \"intro\"",
         "    name: \"Instructions\"",
-        f"    content: {_yaml_scalar(_intro_content(batch_number, len(assignments)))}",
+        f"    content: {_yaml_scalar(_intro_content(batch_number, trial_count=len(scored_pages), demo_count=len(demo_pages)))}",
         "  - type: volume",
         "    id: \"volume\"",
         "    name: \"Volume\"",
-        "    content: \"Adjust to a comfortable listening level before starting the trials.\"",
+        "    content: \"Adjust to a comfortable listening level before starting the examples and trials.\"",
         f"    stimulus: {_yaml_scalar(volume_stimulus)}",
         "    defaultVolume: 0.5",
     ]
 
-    for assignment in assignments:
-        row = assignment.pair_row
-        trial_id = _trial_id(batch_number, assignment)
+    for assignment in pages:
         lines.extend(
             [
-                "  - type: paired_comparison",
-                f"    id: {_yaml_scalar(trial_id)}",
-                f"    name: {_yaml_scalar(f'Trial {assignment.trial_index:03d}')}",
-                f"    content: {_yaml_scalar(_trial_content(row))}",
-                "    showWaveform: false",
-                "    enableLooping: true",
-                f"    reference: {_yaml_scalar(_batch_asset_relpath(asset_prefix, batch_number, assignment, 'reference'))}",
+                "  - type: paired_distance",
+                f"    id: {_yaml_scalar(_page_id(assignment))}",
+                f"    name: {_yaml_scalar(assignment.page_name)}",
+                f"    content: {_yaml_scalar(_page_content(assignment))}",
+            ]
+        )
+        if not assignment.store_results:
+            lines.append("    storeResults: false")
+        lines.extend(
+            [
                 "    stimuli:",
-                f"      C1: {_yaml_scalar(_batch_asset_relpath(asset_prefix, batch_number, assignment, 'candidate'))}",
+                f"      1: {_yaml_scalar(_batch_asset_relpath(asset_prefix, batch_number, assignment, 'item_1'))}",
+                f"      2: {_yaml_scalar(_batch_asset_relpath(asset_prefix, batch_number, assignment, 'item_2'))}",
             ]
         )
 
@@ -426,7 +611,7 @@ def _render_batch_yaml(
     return "\n".join(lines) + "\n"
 
 
-def _write_batch_manifest(output_dir: Path, assignments_by_batch: list[list[TrialAssignment]]) -> Path:
+def _write_batch_manifest(output_dir: Path, pages_by_batch: list[list[PageAssignment]]) -> Path:
     manifest_path = output_dir / "batch_manifest.csv"
     with manifest_path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(
@@ -434,29 +619,48 @@ def _write_batch_manifest(output_dir: Path, assignments_by_batch: list[list[Tria
             fieldnames=[
                 "batch_number",
                 "yaml_file",
+                "total_page_count",
+                "demo_page_count",
                 "trial_count",
                 "main_pair_count",
-                "same_organ_sanity_check_count",
-                "pair_ids",
+                "same_pipe_reference_count",
+                "same_organ_anchor_count",
+                "demo_same_pipe_count",
+                "demo_same_organ_anchor_count",
+                "scored_pair_ids",
             ],
         )
         writer.writeheader()
-        for batch_index, assignments in enumerate(assignments_by_batch, start=1):
-            sanity_check_count = sum(assignment.pair_row.same_organ_pair for assignment in assignments)
+        for batch_index, pages in enumerate(pages_by_batch, start=1):
+            scored_pages = [page for page in pages if page.store_results]
+            demo_pages = [page for page in pages if not page.store_results]
             writer.writerow(
                 {
                     "batch_number": batch_index,
                     "yaml_file": f"marcussen_batch_{batch_index:02d}.yaml",
-                    "trial_count": len(assignments),
-                    "main_pair_count": len(assignments) - sanity_check_count,
-                    "same_organ_sanity_check_count": sanity_check_count,
-                    "pair_ids": ";".join(str(assignment.pair_row.pair_id) for assignment in assignments),
+                    "total_page_count": len(pages),
+                    "demo_page_count": len(demo_pages),
+                    "trial_count": len(scored_pages),
+                    "main_pair_count": sum(page.pair_row.pair_role == PAIR_ROLE_CROSS_ORGAN_MAIN for page in scored_pages),
+                    "same_pipe_reference_count": sum(
+                        page.pair_row.pair_role == PAIR_ROLE_SAME_PIPE_REFERENCE for page in scored_pages
+                    ),
+                    "same_organ_anchor_count": sum(
+                        page.pair_row.pair_role == PAIR_ROLE_SAME_ORGAN_ANCHOR for page in scored_pages
+                    ),
+                    "demo_same_pipe_count": sum(
+                        page.pair_row.pair_role == PAIR_ROLE_SAME_PIPE_REFERENCE for page in demo_pages
+                    ),
+                    "demo_same_organ_anchor_count": sum(
+                        page.pair_row.pair_role == PAIR_ROLE_SAME_ORGAN_ANCHOR for page in demo_pages
+                    ),
+                    "scored_pair_ids": ";".join(str(page.pair_row.pair_id) for page in scored_pages),
                 }
             )
     return manifest_path
 
 
-def _write_trial_manifest(output_dir: Path, assignments_by_batch: list[list[TrialAssignment]], asset_prefix: str) -> Path:
+def _write_trial_manifest(output_dir: Path, pages_by_batch: list[list[PageAssignment]]) -> Path:
     manifest_path = output_dir / "trial_manifest.csv"
     with manifest_path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(
@@ -464,27 +668,48 @@ def _write_trial_manifest(output_dir: Path, assignments_by_batch: list[list[Tria
             fieldnames=[
                 "batch_number",
                 "yaml_file",
-                "trial_index",
-                "trial_id",
+                "page_kind",
+                "page_index",
+                "page_name",
+                "store_results",
+                "page_id",
                 "pair_id",
+                "pair_role",
             ],
         )
         writer.writeheader()
 
-        for batch_index, assignments in enumerate(assignments_by_batch, start=1):
+        for batch_index, pages in enumerate(pages_by_batch, start=1):
             yaml_file = f"marcussen_batch_{batch_index:02d}.yaml"
-            for assignment in assignments:
-                row = assignment.pair_row
+            for assignment in pages:
                 writer.writerow(
                     {
                         "batch_number": batch_index,
                         "yaml_file": yaml_file,
-                        "trial_index": assignment.trial_index,
-                        "trial_id": _trial_id(batch_index, assignment),
-                        "pair_id": row.pair_id,
+                        "page_kind": assignment.page_kind,
+                        "page_index": assignment.page_index,
+                        "page_name": assignment.page_name,
+                        "store_results": "True" if assignment.store_results else "False",
+                        "page_id": _page_id(assignment),
+                        "pair_id": assignment.pair_row.pair_id,
+                        "pair_role": assignment.pair_row.pair_role,
                     }
                 )
     return manifest_path
+
+
+def _short_demo_pages(pages: list[PageAssignment], *, scored_trial_count: int) -> list[PageAssignment]:
+    short_pages: list[PageAssignment] = []
+    scored_kept = 0
+    for page in pages:
+        if not page.store_results:
+            short_pages.append(page)
+            continue
+        if scored_kept >= scored_trial_count:
+            continue
+        short_pages.append(page)
+        scored_kept += 1
+    return short_pages
 
 
 def main() -> int:
@@ -494,50 +719,139 @@ def main() -> int:
 
     rng = random.Random(args.seed)
     rows = _load_pairs(args.pairs_csv)
-    main_rows = [row for row in rows if not row.same_organ_pair]
-    control_rows = [row for row in rows if row.same_organ_pair]
+
+    main_rows = [row for row in rows if row.pair_role == PAIR_ROLE_CROSS_ORGAN_MAIN]
+    same_pipe_rows = [row for row in rows if row.pair_role == PAIR_ROLE_SAME_PIPE_REFERENCE]
+    same_organ_anchor_rows = [row for row in rows if row.pair_role == PAIR_ROLE_SAME_ORGAN_ANCHOR]
 
     main_targets = _batch_targets(len(main_rows), args.batch_count, rng)
-    control_targets = _control_targets(
-        len(control_rows),
-        args.batch_count,
-        args.control_min,
-        args.control_max,
+    same_pipe_demo_targets = _fixed_targets(
+        available_items=len(same_pipe_rows),
+        batch_count=args.batch_count,
+        per_batch=args.demo_same_pipe_per_batch,
+        label="same-pipe demo",
+    )
+    same_organ_demo_targets = _fixed_targets(
+        available_items=len(same_organ_anchor_rows),
+        batch_count=args.batch_count,
+        per_batch=args.demo_same_organ_anchor_per_batch,
+        label="same-organ demo anchor",
+    )
+
+    same_pipe_demo_batches = _distribute_rows(
+        same_pipe_rows,
+        same_pipe_demo_targets,
         rng,
+        group_key=lambda row: row.trial_group_key,
+    )
+    used_same_pipe_ids = {
+        row.pair_id
+        for batch in same_pipe_demo_batches
+        for row in batch
+    }
+    remaining_same_pipe_rows = _remaining_rows(same_pipe_rows, used_pair_ids=used_same_pipe_ids)
+    same_pipe_trial_targets = _fixed_targets(
+        available_items=len(remaining_same_pipe_rows),
+        batch_count=args.batch_count,
+        per_batch=args.same_pipe_per_batch,
+        label="same-pipe hidden reference",
+    )
+    same_pipe_trial_batches = _distribute_rows(
+        remaining_same_pipe_rows,
+        same_pipe_trial_targets,
+        rng,
+        group_key=lambda row: row.trial_group_key,
+    )
+
+    same_organ_demo_batches = _distribute_rows(
+        same_organ_anchor_rows,
+        same_organ_demo_targets,
+        rng,
+        group_key=lambda row: row.trial_group_key,
+    )
+    used_same_organ_anchor_ids = {
+        row.pair_id
+        for batch in same_organ_demo_batches
+        for row in batch
+    }
+    remaining_same_organ_anchor_rows = _remaining_rows(
+        same_organ_anchor_rows,
+        used_pair_ids=used_same_organ_anchor_ids,
+    )
+    same_organ_anchor_targets = _fixed_targets(
+        available_items=len(remaining_same_organ_anchor_rows),
+        batch_count=args.batch_count,
+        per_batch=args.same_organ_anchor_per_batch,
+        label="same-organ hidden anchor",
+    )
+    same_organ_anchor_batches = _distribute_rows(
+        remaining_same_organ_anchor_rows,
+        same_organ_anchor_targets,
+        rng,
+        group_key=lambda row: row.trial_group_key,
     )
 
     main_batches = _distribute_rows(main_rows, main_targets, rng, group_key=lambda row: row.trial_group_key)
-    control_batches = _distribute_rows(control_rows, control_targets, rng, group_key=lambda row: row.trial_group_key)
 
     if args.output_dir.exists():
         shutil.rmtree(args.output_dir)
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
-    assignments_by_batch: list[list[TrialAssignment]] = []
+    pages_by_batch: list[list[PageAssignment]] = []
     for batch_index in range(args.batch_count):
-        batch_rows = [*main_batches[batch_index], *control_batches[batch_index]]
-        assignments = _assign_trials(batch_rows, batch_index, rng)
-        assignments_by_batch.append(assignments)
+        demo_rows = [*same_pipe_demo_batches[batch_index], *same_organ_demo_batches[batch_index]]
+        trial_rows = [
+            *main_batches[batch_index],
+            *same_pipe_trial_batches[batch_index],
+            *same_organ_anchor_batches[batch_index],
+        ]
+        pages_by_batch.append(
+            _assign_batch_pages(
+                demo_rows=demo_rows,
+                trial_rows=trial_rows,
+                batch_index=batch_index,
+                rng=rng,
+            )
+        )
 
     webmushra_root = args.output_dir.parent.parent
     copied_file_count = _copy_batch_audio_assets(
-        assignments_by_batch,
+        pages_by_batch,
         pairs_csv_path=args.pairs_csv,
         webmushra_root=webmushra_root,
         asset_prefix=args.asset_prefix,
     )
 
-    for batch_index in range(args.batch_count):
-        assignments = assignments_by_batch[batch_index]
-        yaml_text = _render_batch_yaml(assignments, batch_index, args.asset_prefix)
+    for batch_index, pages in enumerate(pages_by_batch):
+        yaml_text = _render_batch_yaml(pages, batch_index, args.asset_prefix)
         yaml_path = args.output_dir / f"marcussen_batch_{batch_index + 1:02d}.yaml"
         yaml_path.write_text(yaml_text, encoding="utf-8")
 
-    batch_manifest = _write_batch_manifest(args.output_dir, assignments_by_batch)
-    trial_manifest = _write_trial_manifest(args.output_dir, assignments_by_batch, args.asset_prefix)
+    batch_01_short_pages = _short_demo_pages(
+        pages_by_batch[0],
+        scored_trial_count=DEFAULT_SHORT_DEMO_TRIAL_COUNT,
+    )
+    batch_01_short_yaml = _render_batch_yaml(
+        batch_01_short_pages,
+        0,
+        args.asset_prefix,
+        test_name=(
+            f"Marcussen AB Batch 01 (Short Demo - "
+            f"{sum(page.store_results for page in batch_01_short_pages)} scored trials)"
+        ),
+        test_id="marcussen_batch_01_short",
+    )
+    batch_01_short_path = args.output_dir / "marcussen_batch_01_short.yaml"
+    batch_01_short_path.write_text(batch_01_short_yaml, encoding="utf-8")
+
+    batch_manifest = _write_batch_manifest(args.output_dir, pages_by_batch)
+    trial_manifest = _write_trial_manifest(args.output_dir, pages_by_batch)
 
     main_count = sum(len(batch) for batch in main_batches)
-    control_count = sum(len(batch) for batch in control_batches)
+    same_pipe_trial_count = sum(len(batch) for batch in same_pipe_trial_batches)
+    same_pipe_demo_count = sum(len(batch) for batch in same_pipe_demo_batches)
+    same_organ_anchor_count = sum(len(batch) for batch in same_organ_anchor_batches)
+    same_organ_demo_count = sum(len(batch) for batch in same_organ_demo_batches)
     staged_asset_root = webmushra_root / Path(args.asset_prefix)
 
     print(
@@ -545,18 +859,22 @@ def main() -> int:
         f"using seed={args.seed}."
     )
     print(
+        f"Also generated short demo version: {batch_01_short_path} "
+        f"({sum(page.store_results for page in batch_01_short_pages)} scored trials plus "
+        f"{sum(not page.store_results for page in batch_01_short_pages)} examples)"
+    )
+    print(
         f"Main pairs allocated: {main_count} across {args.batch_count} batches "
         f"({min(main_targets)}-{max(main_targets)} per batch)."
     )
     print(
-        f"Same-organ sanity-check pairs allocated: {control_count} across {args.batch_count} batches "
-        f"({min(control_targets)}-{max(control_targets)} per batch)."
+        f"Same-pipe hidden references allocated: {same_pipe_trial_count} total "
+        f"({args.same_pipe_per_batch} per batch) plus {same_pipe_demo_count} demo examples."
     )
-    if control_count < args.batch_count * args.control_min:
-        print(
-            "Warning: the input CSV does not contain enough same-organ rows to satisfy "
-            f"{args.control_min} controls per batch; the generator used all available control rows instead."
-        )
+    print(
+        f"Same-organ hidden anchors allocated: {same_organ_anchor_count} total "
+        f"({args.same_organ_anchor_per_batch} per batch) plus {same_organ_demo_count} demo examples."
+    )
     print(f"Copied {copied_file_count} WAV files into {staged_asset_root}")
     print(f"Batch manifest: {batch_manifest}")
     print(f"Trial manifest: {trial_manifest}")

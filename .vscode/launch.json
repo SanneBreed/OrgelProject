@@ -65,7 +65,7 @@
       ]
     },
     {
-      "name": "Marcussen: Prepare Listening Dataset",
+      "name": "Marcussen: Prepare Listening Dataset (Pitch Corrected)",
       "type": "debugpy",
       "request": "launch",
       "python": "${workspaceFolder}/.venv/bin/python",
@@ -86,7 +86,7 @@
       ]
     },
     {
-      "name": "Marcussen: Prepare Listening Dataset (Debug First 50 Per Batch)",
+      "name": "Marcussen: Prepare Listening Dataset (Pitch Corrected, Debug First 50 Per Batch)",
       "type": "debugpy",
       "request": "launch",
       "python": "${workspaceFolder}/.venv/bin/python",
@@ -125,6 +125,18 @@
       "serverReadyAction": {
         "pattern": "Development Server \\(http://localhost:8000\\) started",
         "uriFormat": "http://localhost:8000/?config=marcussen_batches/marcussen_batch_01.yaml",
+        "action": "openExternally"
+      }
+    },
+    {
+      "name": "webMUSHRA: Serve Batch 01 Short (10 trials)",
+      "type": "node-terminal",
+      "request": "launch",
+      "command": "php -S localhost:8000",
+      "cwd": "${workspaceFolder}/src/webMUSHRA",
+      "serverReadyAction": {
+        "pattern": "Development Server \\(http://localhost:8000\\) started",
+        "uriFormat": "http://localhost:8000/?config=marcussen_batches/marcussen_batch_01_short.yaml",
         "action": "openExternally"
       }
     }

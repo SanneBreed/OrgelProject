@@ -29,6 +29,17 @@ DEFAULT_TOP_DB = 40.0
 DEFAULT_MIN_SILENCE_SECONDS = 0.08
 DEFAULT_MIN_CLIP_SECONDS = 0.08
 DEFAULT_NORMALIZE_PEAK_DBFS = -1.0
+DEFAULT_TUNING_ANALYSIS_SECONDS = 1.0
+DEFAULT_TUNING_FRAME_LENGTH = 16384
+DEFAULT_TUNING_RESOLUTION = 0.005
+DEFAULT_TUNING_MAX_TRANSITION_RATE = 1.0
+_TUNING_REFERENCE_NOTE_BY_PITCH: dict[str, str] = {
+    "C": "C2",
+    "c0": "C3",
+    "c1": "C4",
+    "c2": "C5",
+    "c3": "C6",
+}
 
 
 @dataclass(slots=True, frozen=True)
@@ -53,6 +64,16 @@ class PreparedAudioFile:
     start_s: float | None
     end_s: float | None
     processing_chain: str
+
+
+def _require_librosa():
+    try:
+        import librosa
+    except ModuleNotFoundError as exc:  # pragma: no cover - env-specific
+        raise RuntimeError(
+            "librosa is required for pitch analysis and correction. Install dependencies with the librosa extra."
+        ) from exc
+    return librosa
 
 
 def _smoothed_power(y_mono: np.ndarray, sr: int) -> np.ndarray:
@@ -222,17 +243,113 @@ def extract_steady_state(y: np.ndarray, sr: int, *, seconds: float) -> np.ndarra
     return y[start : start + target_samples]
 
 
+def estimate_wrapped_pitch_cents_offset(
+    source_path: str | Path,
+    *,
+    expected_pitch: str | None = None,
+    expected_toots: int = DEFAULT_EXPECTED_TOOTS,
+    top_db: float = DEFAULT_TOP_DB,
+    min_silence_seconds: float = DEFAULT_MIN_SILENCE_SECONDS,
+    min_clip_seconds: float = DEFAULT_MIN_CLIP_SECONDS,
+    analysis_seconds: float = DEFAULT_TUNING_ANALYSIS_SECONDS,
+    frame_length: int = DEFAULT_TUNING_FRAME_LENGTH,
+    resolution: float = DEFAULT_TUNING_RESOLUTION,
+    max_transition_rate: float = DEFAULT_TUNING_MAX_TRANSITION_RATE,
+) -> tuple[float, float]:
+    """Estimate a source file's wrapped tuning offset in cents relative to equal temperament."""
+    librosa = _require_librosa()
+    y, sr = load_audio(source_path, sr=None, mono=True)
+
+    segments = detect_toot_segments(
+        source_path,
+        expected_toots=expected_toots,
+        top_db=top_db,
+        min_silence_seconds=min_silence_seconds,
+        min_clip_seconds=min_clip_seconds,
+    )
+    clip = y if not segments else y[segments[0].start_sample : segments[0].end_sample]
+    clip = trim_audio(
+        clip,
+        sr,
+        top_db=top_db,
+        min_silence_seconds=min_silence_seconds,
+        min_clip_seconds=min_clip_seconds,
+    )
+
+    if clip.size == 0:
+        raise ValueError(f"Cannot estimate tuning offset from empty clip: {source_path}")
+
+    clip = extract_steady_state(clip, sr, seconds=max(0.1, analysis_seconds))
+    if expected_pitch is not None and expected_pitch in _TUNING_REFERENCE_NOTE_BY_PITCH:
+        target_midi = librosa.note_to_midi(_TUNING_REFERENCE_NOTE_BY_PITCH[expected_pitch])
+        fmin = float(librosa.midi_to_hz(target_midi - 3))
+        fmax = float(librosa.midi_to_hz(target_midi + 3))
+    else:
+        fmin = librosa.note_to_hz("C0")
+        fmax = librosa.note_to_hz("C7")
+    f0_track, _, _ = librosa.pyin(
+        clip,
+        fmin=fmin,
+        fmax=fmax,
+        sr=sr,
+        frame_length=frame_length,
+        hop_length=max(1, frame_length // 4),
+        resolution=resolution,
+        max_transition_rate=max_transition_rate,
+    )
+    voiced = f0_track[~np.isnan(f0_track)]
+    if voiced.size == 0:
+        f0_track = librosa.yin(
+            clip,
+            fmin=fmin,
+            fmax=fmax,
+            sr=sr,
+            frame_length=frame_length,
+            hop_length=max(1, frame_length // 4),
+        )
+        voiced = f0_track[~np.isnan(f0_track)]
+    if voiced.size == 0:
+        raise ValueError(f"Could not estimate fundamental frequency for {source_path}")
+
+    fundamental_hz = float(np.median(voiced))
+    midi = float(librosa.hz_to_midi(fundamental_hz))
+    cents_offset = 100.0 * (midi - round(midi))
+    return fundamental_hz, cents_offset
+
+
+def pitch_shift_audio(y: np.ndarray, sr: int, *, n_steps: float) -> np.ndarray:
+    """Pitch-shift mono or multichannel audio by `n_steps` semitones."""
+    if abs(n_steps) < 1e-9:
+        return np.asarray(y, dtype=np.float32)
+
+    librosa = _require_librosa()
+    waveform = np.asarray(y, dtype=np.float32)
+    if waveform.ndim == 1:
+        return np.asarray(librosa.effects.pitch_shift(waveform, sr=sr, n_steps=n_steps), dtype=np.float32)
+
+    shifted = np.empty_like(waveform, dtype=np.float32)
+    for channel in range(waveform.shape[1]):
+        shifted[:, channel] = np.asarray(
+            librosa.effects.pitch_shift(waveform[:, channel], sr=sr, n_steps=n_steps),
+            dtype=np.float32,
+        )
+    return shifted
+
+
 def _processing_chain_label(
     *,
     trim: bool,
     normalize: bool,
     steady_state_seconds: float | None,
+    pitch_correct: bool,
 ) -> str:
     steps: list[str] = []
     if trim:
         steps.append("trim")
     if steady_state_seconds is not None:
         steps.append(f"steady_state_{format(steady_state_seconds, 'g')}s")
+    if pitch_correct:
+        steps.append("pitch_correct")
     if normalize:
         steps.append("normalize")
     return "raw" if not steps else ";".join(steps)
@@ -267,6 +384,8 @@ def prepare_source_audio(
     trim: bool = False,
     normalize: bool = False,
     steady_state_seconds: float | None = None,
+    pitch_correct: bool = False,
+    pitch_shift_steps: float = 0.0,
     expected_toots: int = DEFAULT_EXPECTED_TOOTS,
     top_db: float = DEFAULT_TOP_DB,
     min_silence_seconds: float = DEFAULT_MIN_SILENCE_SECONDS,
@@ -279,6 +398,7 @@ def prepare_source_audio(
         trim=trim,
         normalize=normalize,
         steady_state_seconds=steady_state_seconds,
+        pitch_correct=pitch_correct,
     )
     segments: list[AudioSegment | None]
     if expand_toots:
@@ -316,6 +436,8 @@ def prepare_source_audio(
             )
         if steady_state_seconds is not None:
             clip = extract_steady_state(clip, sr, seconds=steady_state_seconds)
+        if pitch_correct:
+            clip = pitch_shift_audio(clip, sr, n_steps=pitch_shift_steps)
         if normalize:
             clip = normalize_audio(clip, peak_dbfs=normalize_peak_dbfs)
 

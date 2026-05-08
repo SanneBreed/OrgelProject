@@ -175,7 +175,7 @@ def _cmd_prepare_listening_dataset(args: argparse.Namespace) -> int:
     print(
         "Prepared listening dataset: "
         f"groups={summary['groups']} rows={summary['rows']} wav_files={summary['wav_files']} "
-        f"out={summary['out_dir']} csv={summary['out_csv']}"
+        f"out={summary['out_dir']} csv={summary['out_csv']} tuning={summary['tuning_report']}"
     )
     return 0
 
