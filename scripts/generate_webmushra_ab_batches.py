@@ -39,6 +39,7 @@ DEFAULT_DEMO_SAME_PIPE_PER_BATCH = 1
 DEFAULT_DEMO_SAME_ORGAN_ANCHOR_PER_BATCH = 1
 DEFAULT_SEED = 20260413
 DEFAULT_SHORT_DEMO_TRIAL_COUNT = 10
+DEFAULT_ALLOWED_PASSWORDS = ("marcussen", "hans", "timbre")
 
 PAIR_ROLE_CROSS_ORGAN_MAIN = "cross_organ_main"
 PAIR_ROLE_SAME_PIPE_REFERENCE = "same_pipe_reference"
@@ -566,6 +567,8 @@ def _render_batch_yaml(
         "showButtonPreviousPage: true",
         "language: \"en\"",
         "remoteService: \"service/write.php\"",
+        "allowedPasswords:",
+        *[f"  - {_yaml_scalar(password)}" for password in DEFAULT_ALLOWED_PASSWORDS],
         "",
         "pages:",
         "  - type: generic",
