@@ -40,14 +40,14 @@ class FilteredDatasetWrapper:
 filtered_dataset = FilteredDatasetWrapper(filtered_items)
 
 # Output CSV
-output_csv = Path("outputs/pairs_within_group_filtered_p8.csv")
+output_csv = Path("outputs/trim_attack_pitched_norm_pairs_within_group_filtered_p8.csv")
 output_csv.parent.mkdir(exist_ok=True, parents=True)
 
 # Run within-group comparisons
 result = run_within_group(
     dataset=filtered_dataset,
     out_csv_path=output_csv,
-    metric="fad_clap_audio",
+    metric="fad_mert_95m",
     max_pairs=None
 )
 

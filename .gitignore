@@ -5,3 +5,5 @@
 __pycache__/
 /testA
 /testB
+/experiments
+/src/outputs
