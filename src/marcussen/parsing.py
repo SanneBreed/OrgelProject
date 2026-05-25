@@ -115,7 +115,7 @@ def parse_filename(path_like: str) -> ParsedItem:
     if "pitch" in parsed:
         meta["pitch"] = str(parsed["pitch"])
         
-    if "normalised" in str(path_obj).lower():
+    if "normalise" or "normalize" in str(path_obj).lower():
         meta["normalisation"] = "yes"
     else:
         meta["normalisation"] = "no"

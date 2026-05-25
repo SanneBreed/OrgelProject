@@ -3,7 +3,8 @@ from marcussen.dataset import MarcussenDataset
 from marcussen.compare import run_within_group
 
 # Load dataset
-dataset_root = "Marcussen 1945-1975_FLAC_Dataset"
+# dataset_root = "Marcussen 1945-1975_FLAC_Dataset"
+dataset_root = "outputs/listening_experiment_pairs_automatic/wav/toot_1" #updated for the newly normalised/trimmed sounds
 dataset = MarcussenDataset(dataset_root)
 
 # Ensure scanning happens
@@ -14,9 +15,9 @@ filtered_items = [
     item for item in all_items
     if getattr(item, "meta", None) is not None
     and item.meta.get("family") == "Principals"
-    and item.meta.get("registration_raw") == "P8"
+    and item.meta.get("registration_raw") == "O4"
     and item.meta.get("division") == "upper_division"
-    and item.meta.get("mic_location") == "close"
+    # and item.meta.get("mic_location") == "close" #already filtered out in the new set
     and item.meta.get("normalisation") == "yes"
 ]
 
@@ -40,14 +41,14 @@ class FilteredDatasetWrapper:
 filtered_dataset = FilteredDatasetWrapper(filtered_items)
 
 # Output CSV
-output_csv = Path("outputs/pairs_within_group_filtered_p8.csv")
+output_csv = Path("outputs/pairs_within_group_filtered_o4.csv")
 output_csv.parent.mkdir(exist_ok=True, parents=True)
 
 # Run within-group comparisons
 result = run_within_group(
     dataset=filtered_dataset,
     out_csv_path=output_csv,
-    metric="fad_clap_audio",
+    metric="fad_clap_music",
     max_pairs=None
 )
 

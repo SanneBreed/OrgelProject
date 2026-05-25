@@ -55,7 +55,7 @@ class MarcussenDataset:
 
     def _scan(self) -> list[ParsedItem]:
         files = sorted(
-            (path for path in self.root.rglob("*") if path.is_file() and path.suffix.lower() == ".flac"),
+            (path for path in self.root.rglob("*") if path.is_file() and path.suffix.lower() in (".flac", ".wav")),
             key=lambda p: str(p),
         )
         kept_files = [
@@ -64,7 +64,7 @@ class MarcussenDataset:
             if not any(marker in path.stem.lower() for marker in SKIP_FILENAME_SUBSTRINGS)
         ]
         logger.info(
-            "Scanning %s, found %d FLAC files, keeping %d after skip filters",
+            "Scanning %s, found %d files, keeping %d after skip filters",
             self.root,
             len(files),
             len(kept_files),
