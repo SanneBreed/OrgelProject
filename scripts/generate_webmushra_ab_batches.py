@@ -20,8 +20,10 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import random
+import re
 import shutil
 from collections import Counter, defaultdict
 from dataclasses import dataclass
@@ -409,11 +411,21 @@ def _yaml_scalar(value: object) -> str:
     return json.dumps(value, ensure_ascii=False)
 
 
-def _batch_asset_relpath(asset_prefix: str, batch_number: int, assignment: PageAssignment, role: str) -> str:
+def _safe_asset_stem(source_relpath: str) -> str:
+    stem = Path(source_relpath).stem
+    safe_stem = re.sub(r"[^A-Za-z0-9._-]+", "_", stem).strip("._-")
+    return (safe_stem or "clip")[:96]
+
+
+def _shared_asset_relpath(asset_prefix: str, source_relpath: str) -> str:
+    normalized_source = Path(source_relpath).as_posix()
+    digest = hashlib.sha1(normalized_source.encode("utf-8")).hexdigest()[:16]
+    suffix = Path(source_relpath).suffix or ".wav"
     return str(
         Path(asset_prefix)
-        / f"batch_{batch_number:02d}"
-        / f"{assignment.page_kind}_{assignment.page_index:03d}_pair_{_pair_file_id(assignment.pair_row)}_{role}.wav"
+        / "clips"
+        / digest[:2]
+        / f"{digest}_{_safe_asset_stem(source_relpath)}{suffix}"
     )
 
 
@@ -428,27 +440,24 @@ def _copy_batch_audio_assets(
     asset_base_dir = webmushra_root / Path(asset_prefix)
     asset_base_dir.mkdir(parents=True, exist_ok=True)
 
-    for stale_batch_dir in asset_base_dir.glob("batch_*"):
-        if stale_batch_dir.is_dir():
-            shutil.rmtree(stale_batch_dir)
+    for stale_path in asset_base_dir.iterdir():
+        if stale_path.is_dir():
+            shutil.rmtree(stale_path)
+        else:
+            stale_path.unlink()
 
     copied_files = 0
+    copied_sources: set[str] = set()
     for assignments in pages_by_batch:
         if not assignments:
             continue
-        batch_number = _batch_number_from_index(assignments[0].batch_index)
         for assignment in assignments:
-            copies = [
-                (
-                    source_root / assignment.first_path,
-                    webmushra_root / _batch_asset_relpath(asset_prefix, batch_number, assignment, "item_1"),
-                ),
-                (
-                    source_root / assignment.second_path,
-                    webmushra_root / _batch_asset_relpath(asset_prefix, batch_number, assignment, "item_2"),
-                ),
-            ]
-            for source_path, destination_path in copies:
+            for source_relpath in (assignment.first_path, assignment.second_path):
+                if source_relpath in copied_sources:
+                    continue
+                copied_sources.add(source_relpath)
+                source_path = source_root / source_relpath
+                destination_path = webmushra_root / _shared_asset_relpath(asset_prefix, source_relpath)
                 destination_path.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(source_path, destination_path)
                 copied_files += 1
@@ -516,7 +525,6 @@ def _page_content(assignment: PageAssignment) -> str:
 def _append_paired_distance_page(
     lines: list[str],
     assignment: PageAssignment,
-    batch_number: int,
     asset_prefix: str,
     *,
     indent: str = "  ",
@@ -534,8 +542,8 @@ def _append_paired_distance_page(
     lines.extend(
         [
             f"{indent}  stimuli:",
-            f"{indent}    1: {_yaml_scalar(_batch_asset_relpath(asset_prefix, batch_number, assignment, 'item_1'))}",
-            f"{indent}    2: {_yaml_scalar(_batch_asset_relpath(asset_prefix, batch_number, assignment, 'item_2'))}",
+            f"{indent}    1: {_yaml_scalar(_shared_asset_relpath(asset_prefix, assignment.first_path))}",
+            f"{indent}    2: {_yaml_scalar(_shared_asset_relpath(asset_prefix, assignment.second_path))}",
         ]
     )
 
@@ -788,7 +796,7 @@ def _render_batch_yaml(
 
     scored_pages = [page for page in pages if page.store_results]
     demo_pages = [page for page in pages if not page.store_results]
-    volume_stimulus = _batch_asset_relpath(asset_prefix, batch_number, pages[0], "item_1")
+    volume_stimulus = _shared_asset_relpath(asset_prefix, pages[0].first_path)
     lines = [
         f"testname: {_yaml_scalar(batch_name)}",
         f"testId: {_yaml_scalar(batch_id)}",
@@ -818,12 +826,12 @@ def _render_batch_yaml(
     ]
 
     for assignment in demo_pages:
-        _append_paired_distance_page(lines, assignment, batch_number, asset_prefix)
+        _append_paired_distance_page(lines, assignment, asset_prefix)
 
     if scored_pages:
         lines.extend(["  -", "    - random"])
         for assignment in scored_pages:
-            _append_paired_distance_page(lines, assignment, batch_number, asset_prefix, indent="    ")
+            _append_paired_distance_page(lines, assignment, asset_prefix, indent="    ")
 
     lines.extend(
         [
@@ -1059,10 +1067,13 @@ def main() -> int:
     )
 
     batch_00_path: Path | None = None
+    default_yaml_path: Path | None = None
     if batch_00_pages:
         batch_00_yaml = _render_batch_yaml(batch_00_pages, SPECIAL_BATCH_ZERO_INDEX, args.asset_prefix)
         batch_00_path = args.output_dir / "marcussen_batch_00.yaml"
         batch_00_path.write_text(batch_00_yaml, encoding="utf-8")
+        default_yaml_path = args.output_dir / "default.yaml"
+        default_yaml_path.write_text(batch_00_yaml, encoding="utf-8")
 
     for batch_index, pages in enumerate(pages_by_batch):
         yaml_text = _render_batch_yaml(pages, batch_index, args.asset_prefix)
@@ -1101,6 +1112,8 @@ def main() -> int:
             f"Generated special batch 00: {batch_00_path} "
             f"({sum(page.store_results for page in batch_00_pages)} scored trials)"
         )
+    if default_yaml_path is not None:
+        print(f"Updated default config: {default_yaml_path}")
     print(
         f"Generated {args.batch_count} webMUSHRA batch configs in {args.output_dir} "
         f"using seed={args.seed}."
@@ -1122,7 +1135,7 @@ def main() -> int:
         f"Same-organ hidden anchors allocated: {same_organ_anchor_count} total "
         f"({args.same_organ_anchor_per_batch} per batch) plus {same_organ_demo_count} demo examples."
     )
-    print(f"Copied {copied_file_count} WAV files into {staged_asset_root}")
+    print(f"Copied {copied_file_count} unique WAV files into {staged_asset_root}")
     print(f"Batch manifest: {batch_manifest}")
     print(f"Trial manifest: {trial_manifest}")
 

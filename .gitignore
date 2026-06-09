@@ -8,3 +8,5 @@ __pycache__/
 /testA
 /testB
 /experiments
+/uva_server_deploy.local.txt
+.vscode/

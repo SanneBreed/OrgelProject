@@ -109,6 +109,56 @@ Useful `prepare_listening_dataset` options:
 - `--max-pairs N` caps the total number of written rows for debugging.
 - `--debug-first-50-per-batch` writes only the first 50 rows from each listening batch and prunes unreferenced WAV files.
 
+## webMUSHRA test deploy
+
+The webMUSHRA test is hosted on the University of Amsterdam server at
+<http://illc-aml-organ.science.uva.nl/>.
+
+To sync the local `src/webMUSHRA/configs` tree to the UvA server over SSH and rebuild its container there, use:
+
+```bash
+./scripts/deploy_webmushra_uva.sh
+```
+
+For a step-by-step deploy log:
+
+```bash
+./scripts/deploy_webmushra_uva.sh --verbose
+```
+
+To force a specific SSH key:
+
+```bash
+./scripts/deploy_webmushra_uva.sh --identity ~/.ssh/id_rsa --verbose
+```
+
+Defaults:
+
+- host: `illc-aml-organ.science.uva.nl`
+- app URL: `http://illc-aml-organ.science.uva.nl/`
+- SSH user: `njaffe`
+- remote directory: `/home/<user>/webMUSHRA`
+- container action: `docker compose up -d --build --remove-orphans`
+
+Notes:
+
+- The script syncs only `src/webMUSHRA/configs/`, not the entire repository.
+- `node_modules/` and macOS metadata are excluded from sync.
+- Remote `results/` is preserved by default so a deploy does not overwrite collected test data.
+- If you intentionally want to copy local results too, add `--sync-results`.
+- Preview the deployment without changing anything by adding `--dry-run`.
+- If you do not override `--remote-dir`, the default remote path is `/home/<user>/webMUSHRA`.
+
+Deployment behavior:
+
+- It is not a full clean rebuild from scratch.
+- First, it creates the remote app directory if it does not exist.
+- Then it runs `rsync --delete` from local `src/webMUSHRA/configs/` to the remote `configs/` directory, so deleted local config files are removed remotely too.
+- By default, `results/` is excluded from that sync, so remote collected CSVs stay in place across deploys.
+- Finally, it runs `docker compose up -d --build --remove-orphans` on the remote host.
+- That tells Docker Compose to rebuild the image from the synced sources, but it may still reuse Docker build cache for unchanged layers.
+- It does not run `docker compose down`, `docker builder prune`, or `docker compose build --no-cache`.
+
 ## Audio Prep
 
 `prepare_listening_dataset` uses the audio-prep pipeline in `src/marcussen/audio_prep.py` to transform each source recording before export.
