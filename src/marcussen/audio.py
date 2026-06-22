@@ -4,6 +4,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import subprocess
+import tempfile
+import soundfile as sf
+
+import logging
+logger = logging.getLogger(__name__)
+
 import numpy as np
 
 
@@ -46,7 +53,12 @@ def _resample_linear(y: np.ndarray, orig_sr: int, target_sr: int) -> np.ndarray:
 def load_audio(path: str | Path, sr: int | None = None, mono: bool = False) -> tuple[np.ndarray, int]:
     """Load audio with optional resampling and mono fold-down."""
     sf = _require_soundfile()
-    y, native_sr = sf.read(str(path), dtype="float32", always_2d=False)
+    try:
+        y, native_sr = sf.read(str(path), dtype="float32", always_2d=False)
+    except sf.LibsndfileError as e:
+        logger.warning("libsndfile failed on %s, retrying via ffmpeg: %s", path, e)
+        y, native_sr = _load_audio_ffmpeg(path)
+
     y = np.asarray(y, dtype=np.float32)
 
     if mono and y.ndim == 2:
@@ -59,6 +71,16 @@ def load_audio(path: str | Path, sr: int | None = None, mono: bool = False) -> t
 
     return y, out_sr
 
+def _load_audio_ffmpeg(path: Path):
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+        tmp_path = tmp.name
+    subprocess.run(
+        ["ffmpeg", "-y", "-i", str(path), "-c:a", "pcm_f32le", tmp_path],
+        check=True, capture_output=True,
+    )
+    y, sr = sf.read(tmp_path, dtype="float32", always_2d=False)
+    Path(tmp_path).unlink(missing_ok=True)
+    return y, sr
 
 def write_wav(path: str | Path, y: np.ndarray, sr: int) -> None:
     """Write waveform data to a WAV file."""
