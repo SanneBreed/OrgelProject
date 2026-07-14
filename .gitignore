@@ -10,3 +10,4 @@ __pycache__/
 /experiments
 /uva_server_deploy.local.txt
 .vscode/
+/src/outputs
