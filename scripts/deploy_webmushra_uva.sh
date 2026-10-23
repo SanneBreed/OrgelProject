@@ -25,6 +25,7 @@ PODMAN_DIR_EXPLICIT=0
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+DOCKERFILE_SOURCE="${PROJECT_ROOT}/src/webMUSHRA/Dockerfile"
 SOURCE_DIR="${PROJECT_ROOT}/src/webMUSHRA/configs"
 RESULTS_SOURCE_DIR="${PROJECT_ROOT}/src/webMUSHRA/results"
 
@@ -56,9 +57,10 @@ Usage: $(basename "$0") [options]
 
 Sync local src/webMUSHRA/configs to the UvA server and redeploy the Docker container there.
 
-By default this syncs only the configs tree, including local config-side audio assets,
+By default this syncs the configs tree, including local config-side audio assets,
+and the local Dockerfile,
 while preserving the remote results/ directory. The podman user creates or updates the
-webMUSHRA checkout from ${WEBMUSHRA_REPO_URL}, then overlays the staged configs.
+webMUSHRA checkout from ${WEBMUSHRA_REPO_URL}, then overlays the staged configs and local Dockerfile.
 
 Options:
   --host HOST             SSH host. Default: ${DEFAULT_HOST}
@@ -157,6 +159,11 @@ fi
 
 if [[ ! -d "${SOURCE_DIR}" ]]; then
   echo "Source directory not found: ${SOURCE_DIR}" >&2
+  exit 1
+fi
+
+if [[ ! -f "${DOCKERFILE_SOURCE}" ]]; then
+  echo "Dockerfile not found: ${DOCKERFILE_SOURCE}" >&2
   exit 1
 fi
 
@@ -264,6 +271,14 @@ log_verbose "Running: rsync ${rsync_args[*]} ${SOURCE_DIR}/ ${SSH_TARGET}:${STAG
 rsync "${rsync_args[@]}" "${SOURCE_DIR}/" "${SSH_TARGET}:${STAGING_DIR}/configs/"
 log "Configs sync complete."
 
+# The remote checkout may not yet contain the local PHP security image pin.
+dockerfile_rsync_args=(-az -e "${RSYNC_RSH}")
+if [[ "${DRY_RUN}" -eq 1 ]]; then
+  dockerfile_rsync_args+=(--dry-run)
+fi
+rsync "${dockerfile_rsync_args[@]}" \
+  "${DOCKERFILE_SOURCE}" "${SSH_TARGET}:${STAGING_DIR}/Dockerfile"
+
 if [[ "${SYNC_RESULTS}" -eq 1 ]]; then
   if [[ ! -d "${RESULTS_SOURCE_DIR}" ]]; then
     echo "Local results directory not found: ${RESULTS_SOURCE_DIR}" >&2
@@ -318,6 +333,7 @@ trap cleanup EXIT
 
 mkdir -p "$handoff_dir/configs"
 cp -a "$STAGING_DIR/configs/." "$handoff_dir/configs/"
+cp "$STAGING_DIR/Dockerfile" "$handoff_dir/Dockerfile"
 
 if [[ "$SYNC_RESULTS" -eq 1 ]]; then
   mkdir -p "$handoff_dir/results"
@@ -377,7 +393,16 @@ prepare_checkout() {
     if command -v git >/dev/null 2>&1; then
       current_branch="$(git symbolic-ref --short HEAD 2>/dev/null || printf 'master')"
       git fetch origin
-      git reset --hard "origin/${current_branch}"
+      # Soft-reset index to remote without touching the working tree, then
+      # checkout each top-level entry individually, skipping results/.
+      # results/ contains files owned by the container's mapped UID that
+      # the podman user cannot delete or modify.
+      git reset "origin/${current_branch}"
+      git ls-tree --name-only HEAD | while IFS= read -r entry; do
+        [ "$entry" = "results" ] && continue
+        git checkout -- "$entry"
+      done
+      git clean -fd -e results 2>/dev/null || true
     else
       echo "git is required for updating the webMUSHRA checkout." >&2
       exit 1
@@ -411,6 +436,9 @@ prepare_checkout() {
 prepare_checkout
 cd "$PODMAN_DIR"
 
+# Apply the local image pin after refreshing the remote checkout.
+cp "$HANDOFF_DIR/Dockerfile" Dockerfile
+
 configure_container_port() {
   if [[ ! -f docker-compose.yml ]]; then
     echo "docker-compose.yml not found in $PODMAN_DIR after clone/update." >&2
@@ -424,8 +452,18 @@ configure_container_port() {
 
   tmp_compose="$(mktemp /tmp/webmushra-compose.XXXXXX)"
   awk '
+    /^  [^ ]/ {
+      in_webmushra = ($0 ~ /^  webmushra:[[:space:]]*$/)
+      if (in_webmushra) {
+        print
+        print "    restart: always"
+        next
+      }
+    }
+    in_webmushra && /^    restart:/ { next }
     {
-      gsub(/"?8080:80"?/, "\"8080:8080\"")
+      gsub(/"8080:80"/, "\"8080:8080\"")
+      sub(/8080:80[[:space:]]*$/, "\"8080:8080\"")
       gsub(/\.\/configs:\/var\/www\/html\/configs(:[A-Za-z,]+)?/, "./configs:/var/www/html/configs:Z")
       gsub(/\.\/results:\/var\/www\/html\/results(:[A-Za-z,]+)?/, "./results:/var/www/html/results:Z")
       print
@@ -471,8 +509,13 @@ else
   mkdir -p results
 fi
 
-chmod -R a+rX .
-chmod -R a+rwX results
+# Make everything readable; skip results/ files that may be owned by the
+# container's mapped UID and cannot be chmod'd by the podman user.
+find . -path ./results -prune -o -print0 | xargs -0 chmod a+rX 2>/dev/null || true
+# Ensure results/ dir itself is accessible; ignore files inside owned by
+# the container's user namespace UID.
+chmod a+rwX results 2>/dev/null || true
+find results -user "$(id -u)" -print0 2>/dev/null | xargs -0 chmod a+rwX 2>/dev/null || true
 
 if [[ "$SKIP_DEPLOY" -eq 1 ]]; then
   exit 0
@@ -480,13 +523,13 @@ fi
 
 run_compose() {
   if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
-    docker compose build --no-cache
+    docker compose build --pull --no-cache
     docker compose up -d --force-recreate --remove-orphans
     return 0
   fi
 
   if command -v docker-compose >/dev/null 2>&1; then
-    docker-compose build --no-cache
+    docker-compose build --pull --no-cache
     docker-compose up -d --force-recreate --remove-orphans
     return 0
   fi
@@ -494,7 +537,7 @@ run_compose() {
   if command -v podman-compose >/dev/null 2>&1; then
     podman-compose \
       --podman-build-args="--storage-opt ignore_chown_errors=true" \
-      build --no-cache
+      build --pull --no-cache
     podman-compose up -d --force-recreate --remove-orphans
     return 0
   fi
@@ -502,6 +545,12 @@ run_compose() {
   echo "Docker Compose is not available for the podman user." >&2
   exit 1
 }
+
+# Rootless Podman needs its user service to restore containers after a reboot.
+# The server must also have lingering enabled for this account.
+if command -v podman >/dev/null 2>&1; then
+  XDG_RUNTIME_DIR="/run/user/$(id -u)" systemctl --user enable podman-restart.service
+fi
 
 run_compose
 PODMAN_EOF

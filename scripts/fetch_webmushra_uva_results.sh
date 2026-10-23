@@ -32,6 +32,12 @@ log() {
   printf '%s\n' "$*"
 }
 
+log_verbose() {
+  if [[ "${VERBOSE}" -eq 1 ]]; then
+    printf '%s\n' "$*"
+  fi
+}
+
 usage() {
   cat <<EOF
 Usage: $(basename "$0") [options]
@@ -138,7 +144,7 @@ RSYNC_RSH="ssh ${SSH_OPTS[*]}"
 
 timestamp="$(timestamp_now)"
 dest_dir="${DEST_ROOT}/webmushra_results_${timestamp}"
-remote_staging_dir="/home/${DEPLOY_USER}/webmushra_results_staging"
+remote_staging_dir="/tmp/webmushra_results_staging"
 mkdir -p "${dest_dir}"
 
 log "Fetch SSH target: ${SSH_TARGET}"
@@ -147,21 +153,18 @@ log "Fetch destination: ${dest_dir}/results/"
 
 mkdir -p "${dest_dir}/results"
 
-# Stage results from the podman user into a directory readable by the deploy user
-stage_cmd=(
-  ssh "${SSH_OPTS[@]}" "${SSH_TARGET}"
-  "PODMAN_USER=$(printf '%q' "${PODMAN_USER}") PODMAN_DIR=$(printf '%q' "${PODMAN_DIR}") STAGING_DIR=$(printf '%q' "${remote_staging_dir}") bash -s"
-)
+# Write the remote helper script to a local temp file
+remote_helper="$(mktemp "${TMPDIR:-/tmp}/webmushra-fetch-helper.XXXXXX")"
+trap 'rm -f "$remote_helper"' EXIT
 
-"${stage_cmd[@]}" <<'EOF'
+cat > "$remote_helper" <<'HELPER_EOF'
 set -euo pipefail
 
-rm -rf "$STAGING_DIR"
-mkdir -p "$STAGING_DIR/results"
-chmod 777 "$STAGING_DIR/results"
+handoff_dir="/tmp/webmushra-fetch-handoff"
 
-podman_script="$(mktemp /tmp/webmushra-copy-results.XXXXXX)"
-cat > "$podman_script" <<'PODMAN_EOF'
+# Write the podman copy script
+podman_copy_script="$(mktemp /tmp/webmushra-fetch-copy.XXXXXX)"
+cat > "$podman_copy_script" <<'PODMAN_EOF'
 set -euo pipefail
 
 if [[ ! -d "$PODMAN_DIR/results" ]]; then
@@ -169,19 +172,55 @@ if [[ ! -d "$PODMAN_DIR/results" ]]; then
   exit 1
 fi
 
-cp -a "$PODMAN_DIR/results/." "$STAGING_DIR/results/"
-chmod -R a+rX "$STAGING_DIR/results"
+rm -rf "$HANDOFF_DIR"
+mkdir -p "$HANDOFF_DIR/results"
+cp -r "$PODMAN_DIR/results/." "$HANDOFF_DIR/results/"
+chmod -R a+rX "$HANDOFF_DIR"
 PODMAN_EOF
-chmod a+rx "$podman_script"
+chmod a+rx "$podman_copy_script"
 
-podman_cmd="$(printf 'PODMAN_DIR=%q STAGING_DIR=%q bash %q' "$PODMAN_DIR" "$STAGING_DIR" "$podman_script")"
-if ! su - "$PODMAN_USER" -c "$podman_cmd"; then
-  echo "Failed to switch to ${PODMAN_USER} with su and copy webMUSHRA results." >&2
-  rm -f "$podman_script"
+# Write the podman cleanup script
+podman_cleanup_script="$(mktemp /tmp/webmushra-fetch-cleanup.XXXXXX)"
+cat > "$podman_cleanup_script" <<'PODMAN_CLEANUP_EOF'
+set -euo pipefail
+rm -rf "$HANDOFF_DIR"
+PODMAN_CLEANUP_EOF
+chmod a+rx "$podman_cleanup_script"
+
+# Run as podman to copy results into the handoff dir
+copy_cmd="$(printf 'PODMAN_DIR=%q HANDOFF_DIR=%q bash %q' "$PODMAN_DIR" "$handoff_dir" "$podman_copy_script")"
+copy_stdin="$(mktemp /tmp/webmushra-fetch-su-copy.XXXXXX)"
+printf '%s\n' "$copy_cmd" > "$copy_stdin"
+if ! sudo su - "$PODMAN_USER" < "$copy_stdin"; then
+  echo "Failed to switch to ${PODMAN_USER} with sudo su and copy webMUSHRA results." >&2
+  rm -f "$podman_copy_script" "$podman_cleanup_script" "$copy_stdin"
   exit 1
 fi
-rm -f "$podman_script"
-EOF
+rm -f "$podman_copy_script" "$copy_stdin"
+
+# Copy from podman-owned handoff to njaffe-owned staging for rsync
+rm -rf "$STAGING_DIR"
+mkdir -p "$STAGING_DIR"
+cp -r "$handoff_dir/results" "$STAGING_DIR/results"
+
+# Clean up the podman-owned handoff dir via sudo su - podman
+cleanup_cmd="$(printf 'HANDOFF_DIR=%q bash %q' "$handoff_dir" "$podman_cleanup_script")"
+cleanup_stdin="$(mktemp /tmp/webmushra-fetch-su-cleanup.XXXXXX)"
+printf '%s\n' "$cleanup_cmd" > "$cleanup_stdin"
+sudo su - "$PODMAN_USER" < "$cleanup_stdin" || true
+rm -f "$podman_cleanup_script" "$cleanup_stdin"
+HELPER_EOF
+chmod 700 "$remote_helper"
+
+# Upload the helper script and execute it remotely with a TTY for the su password prompt
+remote_helper_path="/home/${DEPLOY_USER}/webmushra-fetch-helper.sh"
+log_verbose "Uploading fetch helper to ${SSH_TARGET}:${remote_helper_path}"
+rsync -e "${RSYNC_RSH}" "$remote_helper" "${SSH_TARGET}:${remote_helper_path}"
+
+remote_env="$(printf 'PODMAN_USER=%q PODMAN_DIR=%q STAGING_DIR=%q' "$PODMAN_USER" "$PODMAN_DIR" "$remote_staging_dir")"
+remote_run="$(printf '%s bash %q; status=$?; rm -f %q; exit $status' "$remote_env" "$remote_helper_path" "$remote_helper_path")"
+log_verbose "Running: ssh -tt ${SSH_OPTS[*]} ${SSH_TARGET} ${remote_run}"
+ssh -tt "${SSH_OPTS[@]}" "${SSH_TARGET}" "$remote_run"
 
 # Rsync the staged results to the local destination
 rsync_args=(
@@ -198,3 +237,4 @@ rsync "${rsync_args[@]}" "${SSH_TARGET}:${remote_staging_dir}/results/" "${dest_
 ssh "${SSH_OPTS[@]}" "${SSH_TARGET}" "rm -rf $(printf '%q' "${remote_staging_dir}")"
 
 log "Results fetched into ${dest_dir}"
+open "${dest_dir}"

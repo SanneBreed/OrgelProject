@@ -142,7 +142,7 @@ Defaults:
 
 Notes:
 
-- The script syncs only `src/webMUSHRA/configs/`, not the entire repository.
+- The script syncs `src/webMUSHRA/configs/` and the local Dockerfile, not the entire repository.
 - `node_modules/` and macOS metadata are excluded from sync.
 - Remote `results/` is preserved by default so a deploy does not overwrite collected test data.
 - If you intentionally want to copy local results too, add `--sync-results`.
@@ -151,13 +151,14 @@ Notes:
 
 Deployment behavior:
 
-- It is not a full clean rebuild from scratch.
-- First, it creates the remote app directory if it does not exist.
-- Then it runs `rsync --delete` from local `src/webMUSHRA/configs/` to the remote `configs/` directory, so deleted local config files are removed remotely too.
-- By default, `results/` is excluded from that sync, so remote collected CSVs stay in place across deploys.
-- Finally, it runs `docker compose up -d --build --remove-orphans` on the remote host.
-- That tells Docker Compose to rebuild the image from the synced sources, but it may still reuse Docker build cache for unchanged layers.
-- It does not run `docker compose down`, `docker builder prune`, or `docker compose build --no-cache`.
+- The podman account clones or refreshes its webMUSHRA checkout from the configured repository.
+- The script overlays the staged configs and local Dockerfile after that refresh. This preserves the local PHP security image pin even before it is pushed upstream.
+- The existing rootless Apache port and SELinux volume adjustments are applied to those container files.
+- Remote collected CSVs are preserved unless `--sync-results` is requested.
+- Compose builds with `--pull --no-cache` before recreating the container. If the pinned PHP image is unavailable, the build fails before recreation.
+- The Dockerfile requires PHP 8.4.27 for the [21 October 2026 security fixes](https://www.php.net/archive/2026.php#2026-10-21-5). The official Apache image tag must be available before deployment can succeed.
+
+Deployments set `restart: always` for webMUSHRA. When Podman is available, the script also enables the account's `podman-restart.service` so the container returns after a server reboot. This requires lingering to be enabled for the container account; it is already enabled for `podman` on the UvA server.
 
 ## Audio Prep
 
