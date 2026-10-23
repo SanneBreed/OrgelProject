@@ -4,7 +4,7 @@ from marcussen.compare import run_within_group
 
 # Load dataset
 # dataset_root = "Marcussen 1945-1975_FLAC_Dataset"
-dataset_root = "outputs/listening_experiment_pairs_automatic/wav/toot_1" #updated for the newly normalised/trimmed sounds
+dataset_root = "outputs/trim_normalise_automatic_pairs/wav/toot_1" #updated for the newly normalised/trimmed sounds
 dataset = MarcussenDataset(dataset_root)
 
 # Ensure scanning happens
@@ -14,10 +14,10 @@ all_items = dataset.flat_items_list()  # safely populates _items
 filtered_items = [
     item for item in all_items
     if getattr(item, "meta", None) is not None
-    and item.meta.get("family") == "Principals"
-    and item.meta.get("registration_raw") == "O4"
-    and item.meta.get("division") == "upper_division"
-    # and item.meta.get("mic_location") == "close" #already filtered out in the new set
+    # and item.meta.get("family") == "Strings"
+    # and item.meta.get("registration_raw") == "VdGB"
+    # and item.meta.get("division") == "upper_division"
+    and item.meta.get("mic_location") == "close" #comment if we want to include distant files
     and item.meta.get("normalisation") == "yes"
 ]
 
@@ -41,7 +41,7 @@ class FilteredDatasetWrapper:
 filtered_dataset = FilteredDatasetWrapper(filtered_items)
 
 # Output CSV
-output_csv = Path("outputs/pairs_within_group_filtered_o4.csv")
+output_csv = Path("outputs/comparisn_full_data.csv")
 output_csv.parent.mkdir(exist_ok=True, parents=True)
 
 # Run within-group comparisons
